@@ -1,0 +1,325 @@
+# comfyui-sillytalk
+
+A ComfyUI custom node that turns a ComfyUI server into an image-generation
+service for [SillyTalk](https://github.com/yar3333/sillytalk) — and for anything
+else that wants a picture rather than a graph.
+
+The client sends **a prompt, its reference pictures and a model code**. It gets
+back a job it polls, and then the finished PNG. Everything else stays on the
+server, where it belongs:
+
+- which workflow graph a model code means,
+- **which GPU each model loader lands on**, chosen from the VRAM that is
+  actually free at the moment the job is submitted,
+- where the picture is written and when it is removed again.
+
+```bash
+curl -s -F model=qwen-image-2.1 \
+        -F "prompt=a red cube on a white table, studio light" \
+        http://localhost:8188/sillytalk/generate
+```
+
+```json
+{"job_id": "6edaa0fb-0653-4e6b-92e9-851b8666fd62", "status": "queued", "width": 1328, "height": 1328,
+ "placements": [{"node": "1", "class": "UNETLoaderMultiGPU", "device": "cuda:2", "mb": 6921},
+                {"node": "2", "class": "CLIPLoaderMultiGPU", "device": "cuda:3", "mb": 10966}]}
+```
+
+## Why the split is this way
+
+The alternative — a client that holds workflow files and picks devices — goes
+wrong in two places.
+
+A workflow file in the client means every client has to know the shape of the
+server: node names, links, the API format, which model file is installed. The
+server is the only place that knows those.
+
+A device chosen in a client config is a guess about a moment that has not
+happened yet. On a machine where the same cards also serve LLM inference, or
+where two ComfyUI instances share them, `cuda:0` chosen once in a config file is
+wrong the first time anything else loads — and a loader pinned to a full card
+does not fail politely, it takes the run down with an out-of-memory. Free VRAM
+is only knowable at submit time, by asking torch, on the server.
+
+So the plugin owns the decision and reports it back. Every job response says
+which card each loader got and why, so a surprising placement is visible instead
+of mysterious.
+
+## Install
+
+Drop the folder into `ComfyUI/custom_nodes/` and restart:
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/yar3333/comfyui-sillytalk
+```
+
+Python 3.10 or newer. No dependencies beyond what ComfyUI itself uses.
+
+A working install says this in the log:
+
+```
+[comfyui-sillytalk] v1.0.0 — POST /sillytalk/generate, GET /sillytalk/models
+```
+
+and answers `GET /sillytalk/health`.
+
+The workflow files in [`workflows/`](workflows/) are the catalogue; see
+[Adding a model](#adding-a-model) for what to put there. The nodes a workflow
+uses must exist on the server — the shipped ones use the multi-GPU loaders
+(`UNETLoaderMultiGPU`, `CLIPLoaderMultiGPU`, `VAELoaderMultiGPU`), which is the
+point of letting the server place them.
+
+## API
+
+| Method | Path | What |
+| --- | --- | --- |
+| GET | `/sillytalk` | what this is, and the endpoint list |
+| GET | `/sillytalk/health` | version, catalogue, devices, free VRAM, resident models |
+| GET | `/sillytalk/models` | the model codes a client may ask for |
+| POST | `/sillytalk/generate` | multipart: prompt + pictures → `202` with a `job_id` |
+| GET | `/sillytalk/jobs/{job_id}` | where the run is, and how it was placed |
+| GET | `/sillytalk/jobs/{job_id}/image` | the finished picture, as bytes |
+| DELETE | `/sillytalk/jobs/{job_id}` | drop it from the queue, or interrupt it |
+| POST | `/files/delete` | remove files from `output/`, `input/`, `temp/` |
+| GET | `/files/list` | list them |
+
+Nothing here is authenticated, like the rest of a default ComfyUI install. Keep
+the server on a network you trust, as you already would for `/prompt`.
+
+### POST /sillytalk/generate
+
+`multipart/form-data`:
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `model` | yes | a code from `/sillytalk/models` |
+| `prompt` | yes | at most 8000 characters |
+| `image` | no | repeatable, in order. PNG, JPEG, WebP or BMP |
+| `width`, `height` | no | default to the model's own defaults |
+| `seed` | no | a new one per job when omitted |
+
+Limits: 8 reference pictures, 32 MB each, 96 MB per request. A file whose name
+carries no supported extension is refused — a reference has to be a picture, and
+saving something else under `.png` only moves the failure into the run.
+
+```bash
+curl -s -F model=qwen-image-2512 \
+        -F "prompt=turn these two objects into one calm still life" \
+        -F image=@ref1.png -F image=@ref2.png \
+        -F width=1328 -F height=1328 -F seed=42 \
+        http://localhost:8188/sillytalk/generate
+```
+
+`202` returns the job, including the placement decided at submit time. `400`
+returns `{"error": "…"}` for anything the client got wrong, including a model
+code that is not in the catalogue and a graph that no card can hold.
+
+### Getting the picture
+
+```bash
+id=6edaa0fb-0653-4e6b-92e9-851b8666fd62
+curl -s http://localhost:8188/sillytalk/jobs/$id          # status
+curl -s http://localhost:8188/sillytalk/jobs/$id/image -o out.png
+```
+
+Statuses are `queued`, `running`, `succeeded`, `failed`, `cancelled`.
+`/image` answers `409` while the job is still going, `410` when it failed or the
+picture has already been discarded, `404` for a job this process never started.
+
+`DELETE` cancels: a queued job is taken out of the queue, a running one is
+interrupted.
+
+### What the server keeps, and for how long
+
+- A reference picture is written into `input/` under a `sillytalk_…` name and
+  deleted when the job settles. A request that was refused part-way leaves
+  nothing behind.
+- The result is written into `output/sillytalk/<job>/` by the workflow's own
+  `SaveImage`. `/image` returns those bytes and removes the file. If nobody
+  fetches it, the copy is discarded 15 minutes after the job finished.
+- Job records live an hour, or the 500 most recent, whichever comes first.
+
+This is why the plugin exists next to a `SaveImage` rather than instead of one:
+the picture is a real file on the server while the run is alive, and it is gone
+once the client has it.
+
+### POST /files/delete, GET /files/list
+
+ComfyUI core has no way to remove a file over HTTP — its only DELETE route is
+`/userdata/{file}`, and `DELETE /api/assets/{id}` removes the database row while
+the file on disk stays. These two endpoints fill that gap, and they live here
+because this plugin is what writes files.
+
+```json
+{"files": [{"filename": "a.png", "subfolder": "", "type": "output"}]}
+```
+
+`filename`/`subfolder`/`type` are exactly what ComfyUI reports in a job history
+(or in the `/upload/image` response). Up to 64 files per request.
+
+```json
+{"ok": true, "deleted": ["output/a.png"], "absent": ["output/already-gone.png"], "skipped": []}
+```
+
+A file that is already gone is `absent`, so retrying after a lost response is
+harmless. `ok` is false only when `skipped` is not empty, and each entry there
+carries the reason.
+
+Only regular files inside ComfyUI's own `output/`, `input/` or `temp/` can be
+removed: absolute paths, drive letters, UNC paths, `~` and `..` are refused, and
+so is anything whose resolved path ends up outside that directory — a junction
+or symlink inside `output/` cannot be used to reach elsewhere. Nothing is
+globbed, recursive or shell-based: one unlink per exact filename.
+
+`GET /files/list?type=output|input|temp` takes optional `prefix=`,
+`older_than_min=`, `limit=` (default 200, max 2000) and `all=1`, newest first:
+
+```json
+{"type": "output", "directory": "/srv/comfyui/output", "total": 1, "truncated": false,
+ "files": [{"filename": "a.png", "subfolder": "", "type": "output", "bytes": 1048576, "modified": 1762430000}]}
+```
+
+## GPU placement
+
+Every `device` input in a graph is written by the plugin at submit time. A
+device value inside a workflow file is ignored — that is the point.
+
+The rule is first-fit-decreasing bin packing over the VRAM that is actually
+available:
+
+1. Each loader node is measured by the model files it names, on disk.
+2. Heaviest first. The largest model also carries an activation headroom
+   (2 GiB by default) — that is where sampling happens.
+3. A model goes to the card with the most room, where room is *free VRAM, plus
+   what this server's own cache holds there and could drop, minus what this run
+   already put on it*.
+4. A file that is already resident stays where it is: reloading 20 GB to free an
+   empty card would be silly, and the second loader of a file another node of
+   the same run already placed costs nothing at all.
+
+The distinction in step 3 is the whole difference between a card that is *full*
+and a card that is *busy*. VRAM held by another process is not reclaimable and
+is never counted. VRAM held by this ComfyUI's own model cache is, because the
+server drops it when asked.
+
+When nothing fits, the job is refused before it is queued, with the numbers:
+
+```
+the UNETLoaderMultiGPU loader of node 1 needs about 21532 MiB (model weights plus
+activation headroom) and no card has that much: cuda:0 (AMD Radeon Graphics) has
+206 MiB available (206 free + 0 of this server's own cache); cuda:2 has 14444 MiB
+available (14444 free + 0 …). Free a card, lower the size, or widen SILLYTALK_DEVICES.
+```
+
+### Environment
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SILLYTALK_DEVICES` | all visible | comma-separated device ids this plugin may use, e.g. `cuda:2,cuda:3` |
+| `SILLYTALK_VRAM_HEADROOM_GB` | `2.0` | activation headroom kept for the largest model |
+
+`SILLYTALK_DEVICES` matters on a machine where some cards are reserved for other
+work. Note that a runtime filtering these by its own ordinal — ROCm's
+`HIP_VISIBLE_DEVICES` is the usual one — numbers cards differently from the
+vendor tool, so check which `cuda:N` a card really is before reserving it.
+
+If the server reports no CUDA device at all, or a workflow has no device inputs,
+nothing is refused: the workflow keeps its own values and the job says so.
+
+## The workflow catalogue
+
+One JSON file per model in [`workflows/`](workflows/). **The file name without
+its extension is the model code** a client sends.
+
+```json
+{
+  "label": "Qwen-Image 2.1 (references through the same model)",
+  "defaults": { "width": 1328, "height": 1328 },
+  "variants": [
+    { "refs": 0, "workflow": { … } },
+    { "refs": 1, "workflow": { … } },
+    { "refs": 2, "workflow": { … } }
+  ]
+}
+```
+
+A `workflow` is either the API format (what *Save (API)* produces) or the UI
+format (what *Save* produces). UI graphs are converted once, on first use, with
+the vendored converter, and the result is cached until the file's modification
+time changes.
+
+A file that does not parse, or whose variants are broken, does not take the rest
+of the catalogue with it: it disappears from `/sillytalk/models` and appears in
+`/sillytalk/health` under `broken_workflows` with the reason.
+
+### Placeholders
+
+A graph asks for the run's values by holding the whole placeholder as a string
+value — `"PARAM_PROMPT"`, not `"a prefix PARAM_PROMPT"`.
+
+| Placeholder | Type | Value |
+| --- | --- | --- |
+| `PARAM_PROMPT` | string | the prompt |
+| `PARAM_SEED` | int | the seed |
+| `PARAM_INT_OUTPUT_IMAGE_WIDTH` | int | the width |
+| `PARAM_INT_OUTPUT_IMAGE_HEIGHT` | int | the height |
+| `PARAM_STRING_OUTPUT_IMAGE_FILENAME` | string | `sillytalk/<job>` — for `SaveImage`'s `filename_prefix` |
+| `PARAM_STRING_INPUT_IMAGE_FILENAME` | string | the reference, for a 1-reference variant |
+| `PARAM_STRING_INPUT_IMAGE_FILENAME_1` … `_8` | string | the references, for a variant with several |
+| `PARAM_DEVICE` | — | accepted and ignored: every `device` input is written by the placement code |
+
+Reference values are flat file names in `input/`, because that is what a
+`LoadImage` node lists in a current ComfyUI. A placeholder the plugin does not
+know is a `400` that lists what it does — a typo fails loudly at submit time
+rather than drawing a picture of the string `PARAM_PROMPT`.
+
+### Adding a model
+
+1. Build the workflow in the UI and save it. Make one variant per number of
+   references the model can take, each with `LoadImage` nodes holding
+   `PARAM_STRING_INPUT_IMAGE_FILENAME…`, a text encoder holding `PARAM_PROMPT`,
+   a `KSampler` holding `PARAM_SEED`, and a `SaveImage` whose `filename_prefix`
+   is `PARAM_STRING_OUTPUT_IMAGE_FILENAME`.
+2. Save it as `workflows/<your-model-code>.json` in the format above.
+3. Restart ComfyUI, or touch the file to drop the conversion cache, and check
+   `GET /sillytalk/models`.
+
+`scripts/import_sillytalk_workflows.py` does this for the older
+`{text, oneImage, twoImages}` triple SillyTalk used to ship: it merges the three
+files into one catalogue file and strips the device values the client used to
+write.
+
+## Tests
+
+They run against the interpreter that runs ComfyUI, since that is the one with
+aiohttp:
+
+```bash
+<comfyui>/.venv/bin/python -m unittest discover -s tests -t tests
+```
+
+No GPU, no server and no network: `folder_paths` is stubbed, and the placement
+tests hand the code a list of cards with made-up VRAM numbers. What is covered
+is the arithmetic that decides a placement, the catalogue's parsing rules, the
+placeholder substitution, the job record's lifetime, and the file endpoints'
+path handling.
+
+## Vendored code
+
+`sillytalk_plugin/vendor/workflow_converter.py` is a copy of the converter from
+[SethRobinson/comfyui-workflow-to-api-converter-endpoint](https://github.com/SethRobinson/comfyui-workflow-to-api-converter-endpoint)
+(v2.3.0), which is public domain. [`vendor/NOTICE.md`](vendor/NOTICE.md) carries
+the source, author and licence text. It is vendored rather than called over HTTP
+so that a plugin does not depend on another plugin being installed, and it is
+kept unmodified so a future sync stays a copy and paste.
+
+Everything else in this repository is MIT — see [`LICENSE`](LICENSE).
+
+## Version history
+
+**1.0.0** — First release. `/sillytalk/*` generation endpoints with server-side
+GPU placement, the workflow catalogue, the `/files/delete` and `/files/list`
+cleanup endpoints moved here from
+`comfyui-workflow-to-api-converter-endpoint`, and the vendored workflow
+converter.

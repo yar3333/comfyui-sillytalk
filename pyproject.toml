@@ -1,0 +1,22 @@
+[project]
+name = "comfyui-sillytalk"
+description = "ComfyUI custom node that generates pictures for the SillyTalk chat app: a prompt, reference images and a model code in, a finished PNG out — the server picks which GPU runs it"
+version = "1.0.0"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = []
+authors = [
+    {name = "yar3333"}
+]
+classifiers = ["Environment :: GPU", "Framework :: aiohttp", "Intended Audience :: End Users/Desktop"]
+
+[project.urls]
+Repository = "https://github.com/yar3333/comfyui-sillytalk"
+Issues = "https://github.com/yar3333/comfyui-sillytalk/issues"
+
+[tool.comfy]
+PublisherId = "yar3333"
+DisplayName = "SillyTalk Image Generation"
+Icon = ""
+Description = "HTTP endpoints that draw pictures for SillyTalk from a prompt, reference images and a model code. Owns the workflow graphs, places every model loader on the GPU with the most free VRAM, and cleans up after the run. Also adds the /files/delete and /files/list endpoints ComfyUI does not have."
