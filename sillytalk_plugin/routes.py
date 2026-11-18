@@ -26,7 +26,7 @@ from typing import Any
 
 from aiohttp import web
 
-from . import jobs, model_files, placement
+from . import jobs, lora_fit, model_files, placement
 from . import loras as loras_module
 from .jobs import CANCELLED, FAILED, RUNNING
 from .workflows import WORKFLOW_DIR, entries
@@ -34,7 +34,7 @@ from .workflows import models as catalogue_models
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 MAX_PROMPT_CHARS = 8000
 MAX_REF_FILES = 8
@@ -127,17 +127,52 @@ async def list_models(request: web.Request) -> web.Response:
     user dropped in becomes selectable without either side being reconfigured.
     `loras.max` is how many slots that model's workflow wired — 0 means it takes
     no LoRAs at all.
+
+    Each LoRA also carries `fits`: keyed by model file, whether it merges into
+    that one, so the client can grey out what would silently do nothing and say
+    why, per file the user is pointing the model at. See `lora_fit`.
     """
     diffusion = model_files.listing(model_files.DIFFUSION_FOLDER)
     loras = model_files.listing(model_files.LORA_FOLDER)
     described = []
     for spec in catalogue_models():
         entry = spec.describe()
-        if spec.model_file:
-            entry["model_files"] = {"folder": model_files.DIFFUSION_FOLDER, "options": diffusion}
-        entry["loras"] = {"max": loras_module.available_slots(spec), "options": loras}
+        files = diffusion if spec.model_file else []
+        if files:
+            entry["model_files"] = {"folder": model_files.DIFFUSION_FOLDER, "options": files}
+        slots = loras_module.available_slots(spec)
+        # A workflow with no slots takes no LoRAs at all, so there is nothing to
+        # judge and no reason to pay for the verdicts in every probe's answer.
+        entry["loras"] = {
+            "max": slots,
+            "options": _lora_options(loras, [str(option["name"]) for option in files] if slots else []),
+        }
         described.append(entry)
     return _json({"models": described})
+
+
+def _lora_options(loras: list[dict[str, Any]], files: list[str]) -> list[dict[str, Any]]:
+    """Copies of the LoRA listing with a per-file verdict merged in.
+
+    Copies because the listing itself is cached and shared between the models —
+    writing a verdict into it would give every model the first one's answer.
+    """
+    out: list[dict[str, Any]] = []
+    for option in loras:
+        entry = dict(option)
+        fits: dict[str, dict[str, str]] = {}
+        for file_name in files:
+            verdict = lora_fit.fit(str(option["name"]), file_name)
+            if verdict is None:
+                continue
+            note = {"fits": verdict["fits"]}
+            if verdict["reason"]:
+                note["reason"] = verdict["reason"]
+            fits[file_name] = note
+        if fits:
+            entry["fits"] = fits
+        out.append(entry)
+    return out
 
 
 async def generate(request: web.Request) -> web.Response:

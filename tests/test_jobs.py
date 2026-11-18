@@ -9,12 +9,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import TempDirTestCase, register_model_folder
+from support import TempDirTestCase, lora_header, model_header, register_model_folder, write_safetensors
 
-from sillytalk_plugin import jobs, model_files, workflows
+from sillytalk_plugin import jobs, lora_fit, model_files, workflows
 from sillytalk_plugin.workflows import ModelSpec
 
 SIZES = (("square", (1328, 1328)), ("portrait", (1140, 1472)))
+MODEL_FILE = "qwen_image_2.1_int8_convrot.safetensors"
 
 
 def spec_with(graph: dict, code: str = "test-model", root: Path | None = None, **extra) -> ModelSpec:
@@ -117,7 +118,9 @@ class PickTest(TempDirTestCase):
         register_model_folder("diffusion_models", self.models)
         register_model_folder("loras", self.loras)
         model_files.forget_cache()
+        lora_fit.forget_cache()
         self.addCleanup(model_files.forget_cache)
+        self.addCleanup(lora_fit.forget_cache)
 
     def test_no_request_keeps_the_workflows_own_file(self):
         spec = spec_with({}, model_file="qwen_image_2.1_int8_convrot.safetensors")
@@ -146,22 +149,40 @@ class PickTest(TempDirTestCase):
 
     def test_loras_keep_their_order_and_strength(self):
         (self.loras / "second.safetensors").write_bytes(b"z" * 10)
-        chosen = jobs._pick_loras([{"name": "second.safetensors", "strength": 0.6}, {"name": "style.safetensors"}])
+        chosen = jobs._pick_loras([{"name": "second.safetensors", "strength": 0.6}, {"name": "style.safetensors"}], None)
         self.assertEqual([entry["name"] for entry in chosen], ["second.safetensors", "style.safetensors"])
         self.assertEqual(chosen[0]["strength"], 0.6)
         self.assertEqual(chosen[1]["strength"], 1.0, "an unstated strength is a full one")
 
     def test_an_unknown_lora_lists_the_ones_that_are(self):
         with self.assertRaises(jobs.JobError) as caught:
-            jobs._pick_loras([{"name": "ghost.safetensors"}])
+            jobs._pick_loras([{"name": "ghost.safetensors"}], None)
         message = str(caught.exception)
         self.assertIn("no 'ghost.safetensors'", message)
         self.assertIn("style.safetensors", message)
 
     def test_a_lora_without_a_name_is_refused(self):
         with self.assertRaises(jobs.JobError) as caught:
-            jobs._pick_loras([{"strength": 0.5}])
+            jobs._pick_loras([{"strength": 0.5}], None)
         self.assertIn("needs a 'name'", str(caught.exception))
+
+    def test_a_lora_that_cannot_merge_into_the_file_is_refused_with_what_does(self):
+        write_safetensors(self.models / MODEL_FILE, model_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        write_safetensors(self.loras / "style.safetensors", lora_header({"transformer_blocks.0.attn.to_q": (3072, 3072)}))
+        write_safetensors(self.loras / "right.safetensors", lora_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        lora_fit.forget_cache()
+        with self.assertRaises(jobs.JobError) as caught:
+            jobs._pick_loras([{"name": "style.safetensors"}], MODEL_FILE)
+        message = str(caught.exception)
+        self.assertIn("does not fit", message)
+        self.assertIn("at a size this model does not have", message)
+        self.assertIn("right.safetensors", message, "the answer says what to use instead")
+        self.assertNotIn("style.safetensors,", message)
+
+    def test_a_file_whose_header_cannot_be_read_is_not_a_verdict(self):
+        """The files here are a few bytes of nothing; refusing them would break every run."""
+        chosen = jobs._pick_loras([{"name": "style.safetensors"}], MODEL_FILE)
+        self.assertEqual([entry["name"] for entry in chosen], ["style.safetensors"])
 
 
 class ErrorTextTest(unittest.TestCase):

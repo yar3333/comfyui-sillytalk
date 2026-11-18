@@ -111,7 +111,10 @@ could be pointed at:
                   "options": [{"name": "qwen_image_2.1_int8_convrot.safetensors", "mb": 6919},
                               {"name": "my-qwen-derivative.safetensors", "mb": 20000}]},
   "loras": {"max": 5,
-            "options": [{"name": "my-style.safetensors", "mb": 224}]}
+            "options": [{"name": "my-style.safetensors", "mb": 224,
+                         "fits": {"qwen_image_2.1_int8_convrot.safetensors": {"fits": "no"},
+                                  "my-qwen-derivative.safetensors": {"fits": "yes"},
+                                  "qwen_image_2512_fp8_e4m3fn.safetensors": {"fits": "yes"}}}]}
 }]}
 ```
 
@@ -122,6 +125,11 @@ included, under their relative names), so a file the user drops in becomes a
 choice in the client without either side being reconfigured. The listing is cached
 for 15 seconds, which is long enough for a settings dialog to open quickly and
 short enough that a new file appears without a restart.
+
+Each LoRA also answers, per model file, whether it would merge into that one —
+see [Which LoRA fits which file](#which-lora-fits-which-file). `fits` is absent
+for a pair whose headers could not be read, which is not a verdict; a LoRA with no
+`fits` at all is offered as before.
 
 ### POST /sillytalk/generate
 
@@ -142,6 +150,14 @@ job is queued, so a name that is not there is answered with the list that is:
 
 ```json
 {"error": "this server has no 'my-qwen.safetensors' in models/diffusion_models/ — it has: qwen_image_2.1_int8_convrot.safetensors, qwen_image_2512_fp8_e4m3fn.safetensors. Drop the file there and ask again."}
+```
+
+A LoRA the file being loaded cannot take is refused the same way, because the
+alternative is a run that reports itself a success and draws the picture the model
+makes without it:
+
+```json
+{"error": "a LoRA of this run does not fit 'qwen_image_2.1_int8_convrot.safetensors': 'Qwen-Image-Lightning-4steps-V1.0.safetensors' — 128 of the layers it names are at a size this model does not have, so ComfyUI would load it and skip them — the picture would be close to the one you get without it. What models/loras/ has that it either fits or cannot judge: nothing."}
 ```
 
 Limits: 8 reference pictures, 32 MB each, 96 MB per request. A file whose name
@@ -377,14 +393,55 @@ Two consequences worth knowing:
 quantised text encoder that a CLIP-side merge would not survive, so a LoRA here
 only ever touches the model.
 
-One trap this server cannot see for you: a LoRA trained for a different model is
-**skipped, not refused**. ComfyUI matches its tensors by shape, and a file whose
-width is 3072 meeting a model that is 4096 wide produces a console full of
-`lora key not loaded: …` and a picture that looks exactly like the one without
-it. The job still succeeds — the plugin hands the graph to ComfyUI and gets a
-finished file back, and nothing in that answer says a merge was dropped. So when
-a LoRA appears to do nothing, the server's own console is where the answer is;
-the file name it complains about is the one that was ticked.
+A LoRA trained for a different model used to be the one thing this server could
+not see: ComfyUI matches a LoRA's tensors by shape and **skips** the ones that do
+not fit, so a file whose width is 3072 meeting a model that is 4096 wide produced
+a console full of `lora key not loaded: …` and a picture that looked exactly like
+the one without it, from a job that reported itself `succeeded`. It is seen now —
+see the next section — and refused before the queue.
+
+### Which LoRA fits which file
+
+`/sillytalk/models` answers per LoRA and per model file whether the two merge, and
+`POST /sillytalk/generate` refuses what it can prove will not. The check reads the
+safetensors header and nothing else: the first 8 bytes of the file are the length
+of a JSON table naming every tensor with its dtype and shape, so a 20 GB
+checkpoint costs a few hundred kilobytes and no torch is involved. Five LoRAs
+against six checkpoints — thirty pairs, on a folder of 90 GB — is 153 ms cold and
+under a millisecond once the headers have been read. A verdict is trusted for as
+long as the mtime and size of both files say they are unchanged.
+
+The LoRA's two halves give the `in` and `out` of every layer it wants to patch;
+the checkpoint's own weights give the same pair under its own naming. The names of
+the wild are normalised first: the prefixes `model.diffusion_model.`,
+`diffusion_model.`, `lora_unet_` and `base_model.model.`, the halves
+`lora_down`/`lora_A` and `lora_up`/`lora_B`, the `.alpha` entries, and the
+`weight_scale` an int8 or fp8 checkpoint carries beside every quantised weight —
+which is not the weight, and would compare a rank-1 scale against a LoRA.
+
+Three answers, and the difference between the last two is the whole design:
+
+| | meaning | what happens |
+| --- | --- | --- |
+| `yes` | every layer it names, the model has at that size | merged; a note when a few of them are stale and ComfyUI will skip those |
+| `no` | proof it is for another file: more named layers at the wrong size than at the right one, or every target a text encoder | refused with a `400`, greyed in the client with the reason |
+| `unknown` | none of its layer names occur in this model | allowed, and flagged |
+
+`unknown` is allowed on purpose. LoRA naming varies — peft, DCNV3, diffusers, and
+whatever a training script wrote out — and this reads the common few. A file this
+code did not recognise is not a file that will not work, and refusing it would
+turn a working feature into one that quietly stopped accepting other people's
+models. What `no` claims is the opposite: not "I did not understand this" but "I
+understood it, and ComfyUI would load it and drop it".
+
+A text-encoder LoRA is a `no` for a reason of its own: these graphs force
+`strength_clip` to `0`, so such a file would change nothing even where its layers
+exist.
+
+The rule that weighs wrong against right is deliberately not "any mismatch
+refuses". A LoRA that fits 700 layers and carries 1 stale tensor merges fine —
+ComfyUI skips the one — and refusing it would be this check's own false alarm.
+Zero fitting against 128 wrong is the silent no-op, and that is what gets refused.
 
 ### Adding a model
 
@@ -433,6 +490,14 @@ kept unmodified so a future sync stays a copy and paste.
 Everything else in this repository is MIT — see [`LICENSE`](LICENSE).
 
 ## Version history
+
+**1.2.0** — The plugin decides which LoRA fits which file. It reads the
+safetensors headers of both — a few hundred kilobytes, no torch — and says `yes`,
+`no` or `unknown` per pair in `/sillytalk/models`, so the client can grey out what
+would merge into nothing and say why; `POST /sillytalk/generate` refuses a `no`
+instead of drawing the picture the model makes without the LoRA. This is the
+silent-skip case: ComfyUI drops tensors whose shapes disagree and still reports
+the run a success.
 
 **1.1.0** — The server decides the pixels, the client the shape: `width`/`height`
 are gone from the request and a workflow file carries `sizes` per orientation.

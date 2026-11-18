@@ -14,7 +14,9 @@ Run the suite with the interpreter that runs ComfyUI (it has aiohttp):
 from __future__ import annotations
 
 import atexit
+import json
 import shutil
+import struct
 import sys
 import tempfile
 import types
@@ -78,6 +80,42 @@ def register_model_folder(folder_name: str, path: Path) -> None:
     _MODEL_PATHS.setdefault(folder_name, []).append(path)
 
 
+def write_safetensors(path: Path, tensors: dict[str, tuple[str, list[int]]]) -> Path:
+    """A file whose safetensors header lists `tensors` as `name: (dtype, shape)`.
+
+    Only the header is written, because nothing in the plugin reads past it: a test
+    can hold a "20 GB" checkpoint in a few hundred bytes.
+    """
+    meta = {
+        name: {"dtype": dtype, "shape": list(shape), "data_offsets": [0, 0]}
+        for name, (dtype, shape) in tensors.items()
+    }
+    body = json.dumps(meta).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(struct.pack("<Q", len(body)) + body)
+    return path
+
+
+def model_header(layers: dict[str, tuple[int, int]], prefix: str = "model.diffusion_model.") -> dict:
+    """A checkpoint header from `{layer: (out, in)}`, in ComfyUI's own naming."""
+    return {f"{prefix}{base}.weight": ("BF16", [out, width]) for base, (out, width) in layers.items()}
+
+
+def lora_header(
+    layers: dict[str, tuple[int, int]],
+    prefix: str = "diffusion_model.",
+    down: str = "lora_down",
+    up: str = "lora_up",
+    rank: int = 32,
+) -> dict:
+    """A LoRA header from `{layer: (in, out)}`, as one of the formats in the wild."""
+    out: dict[str, tuple[str, list[int]]] = {}
+    for base, (width, height) in layers.items():
+        out[f"{prefix}{base}.{down}.weight"] = ("BF16", [rank, width])
+        out[f"{prefix}{base}.{up}.weight"] = ("BF16", [height, rank])
+    return out
+
+
 class TempDirTestCase(unittest.IsolatedAsyncioTestCase):
     """Own output/input/temp folders.
 
@@ -99,4 +137,12 @@ class TempDirTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._tmp.cleanup)
 
 
-__all__ = ["PLUGIN_DIR", "TempDirTestCase", "register_model_folder", "unittest"]
+__all__ = [
+    "PLUGIN_DIR",
+    "TempDirTestCase",
+    "lora_header",
+    "model_header",
+    "register_model_folder",
+    "unittest",
+    "write_safetensors",
+]

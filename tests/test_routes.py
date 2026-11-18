@@ -13,9 +13,9 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from support import TempDirTestCase, register_model_folder
+from support import TempDirTestCase, lora_header, model_header, register_model_folder, write_safetensors
 
-from sillytalk_plugin import jobs, model_files, routes
+from sillytalk_plugin import jobs, lora_fit, model_files, routes
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
@@ -184,6 +184,19 @@ class GenerateTest(TempDirTestCase):
         self.assertIn("no more than", response.body.decode())
 
 
+def swappable_spec(code: str = "m", model_file: str = "base.safetensors") -> SimpleNamespace:
+    """A catalogue entry as `ModelSpec.describe()` returns it, for a workflow whose
+    model file the client may change."""
+    return SimpleNamespace(
+        code=code, label=code.upper(), max_refs=2, refs=[0], model_file=model_file,
+        default_orientation="square",
+        sizes=(("square", (1328, 1328)), ("portrait", (1140, 1472))),
+        describe=lambda: {"code": code, "label": code.upper(), "max_refs": 2, "refs": [0],
+                          "orientation": "square", "sizes": {"square": [1328, 1328]},
+                          "model_file": model_file},
+    )
+
+
 class CatalogueTest(TempDirTestCase):
     """`/sillytalk/models` is what the settings dialog fills its pick from, so
     the server's own folders have to be in the answer — a client that had to
@@ -200,7 +213,9 @@ class CatalogueTest(TempDirTestCase):
         register_model_folder("diffusion_models", self.models)
         register_model_folder("loras", self.loras)
         model_files.forget_cache()
+        lora_fit.forget_cache()
         self.addCleanup(model_files.forget_cache)
+        self.addCleanup(lora_fit.forget_cache)
 
     async def get(self, specs):
         with mock.patch.object(routes, "catalogue_models", return_value=specs), \
@@ -209,13 +224,7 @@ class CatalogueTest(TempDirTestCase):
         return json.loads(response.body.decode())
 
     async def test_the_answer_offers_the_files_of_the_server(self):
-        spec = SimpleNamespace(code="m", label="M", max_refs=2, refs=[0], model_file="base.safetensors",
-                               default_orientation="square",
-                               sizes=(("square", (1328, 1328)), ("portrait", (1140, 1472))),
-                               describe=lambda: {"code": "m", "label": "M", "max_refs": 2, "refs": [0],
-                                                 "orientation": "square", "sizes": {"square": [1328, 1328]},
-                                                 "model_file": "base.safetensors"})
-        body = await self.get([spec])
+        body = await self.get([swappable_spec()])
         model = body["models"][0]
         self.assertEqual([entry["name"] for entry in model["model_files"]["options"]], ["base.safetensors"])
         self.assertEqual([entry["name"] for entry in model["loras"]["options"]], ["style.safetensors"])
@@ -227,6 +236,49 @@ class CatalogueTest(TempDirTestCase):
                                                  "model_file": None})
         body = await self.get([spec])
         self.assertNotIn("model_files", body["models"][0])
+        self.assertNotIn("fits", body["models"][0]["loras"]["options"][0],
+                         "with no file to merge into there is nothing to judge")
+
+    async def test_a_lora_says_per_file_whether_it_merges_and_why(self):
+        write_safetensors(self.models / "base.safetensors",
+                          model_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        write_safetensors(self.models / "other.safetensors",
+                          model_header({"transformer_blocks.0.attn.to_q": (3072, 3072)}))
+        write_safetensors(self.loras / "style.safetensors",
+                          lora_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        model_files.forget_cache()
+        lora_fit.forget_cache()
+        body = await self.get([swappable_spec()])
+        option = body["models"][0]["loras"]["options"][0]
+        self.assertEqual(option["fits"]["base.safetensors"]["fits"], "yes")
+        self.assertNotIn("reason", option["fits"]["base.safetensors"], "nothing to warn about says nothing")
+        self.assertEqual(option["fits"]["other.safetensors"]["fits"], "no")
+        self.assertIn("at a size this model does not have", option["fits"]["other.safetensors"]["reason"])
+
+    async def test_the_verdicts_do_not_leak_into_the_cached_folder_listing(self):
+        """The listing is shared by every model; writing a verdict into it would give
+        them all the first one's answer and outlive the request that made it."""
+        write_safetensors(self.models / "base.safetensors",
+                          model_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        write_safetensors(self.loras / "style.safetensors",
+                          lora_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        model_files.forget_cache()
+        lora_fit.forget_cache()
+        await self.get([swappable_spec()])
+        self.assertNotIn("fits", model_files.listing(model_files.LORA_FOLDER)[0])
+
+    async def test_a_workflow_with_no_slots_says_nothing_about_loras(self):
+        write_safetensors(self.models / "base.safetensors",
+                          model_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        write_safetensors(self.loras / "style.safetensors",
+                          lora_header({"transformer_blocks.0.attn.to_q": (4096, 4096)}))
+        model_files.forget_cache()
+        lora_fit.forget_cache()
+        with mock.patch.object(routes, "catalogue_models", return_value=[swappable_spec()]), \
+                mock.patch.object(routes.loras_module, "available_slots", return_value=0):
+            body = json.loads((await routes.list_models(FakeRequest())).body.decode())
+        self.assertEqual(body["models"][0]["loras"]["max"], 0)
+        self.assertNotIn("fits", body["models"][0]["loras"]["options"][0])
 
 
 class LoraFieldTest(unittest.TestCase):

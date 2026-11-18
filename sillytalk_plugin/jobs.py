@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import lora_fit
 from . import loras as loras_module
 from . import model_files
 from . import placement as placement_module
@@ -200,7 +201,7 @@ async def start(
         raise JobError(str(err)) from err
 
     file_name = _pick_model_file(spec, model_file)
-    chosen = _pick_loras(loras or [])
+    chosen = _pick_loras(loras or [], file_name)
 
     job = Job(
         id=str(uuid.uuid4()),
@@ -259,8 +260,8 @@ def _pick_model_file(spec: ModelSpec, requested: str | None) -> str | None:
     return wanted
 
 
-def _pick_loras(requested: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The LoRA list of a run, each name checked against models/loras/."""
+def _pick_loras(requested: list[dict[str, Any]], file_name: str | None) -> list[dict[str, Any]]:
+    """The LoRA list of a run, each name checked against models/loras/ and against the file."""
     out: list[dict[str, Any]] = []
     for item in requested:
         name = str((item or {}).get("name") or "").strip()
@@ -273,7 +274,37 @@ def _pick_loras(requested: list[dict[str, Any]]) -> list[dict[str, Any]]:
             )
         strength = (item or {}).get("strength")
         out.append({"name": name, "strength": 1.0 if strength is None else float(strength)})
+    _reject_unfit(out, file_name)
     return out
+
+
+def _reject_unfit(chosen: list[dict[str, Any]], file_name: str | None) -> None:
+    """Refuse what this server can prove will not merge into the file being loaded.
+
+    ComfyUI does not refuse it: it skips every tensor whose shape disagrees, reports
+    the run `succeeded`, and hands back the picture the model makes without the
+    LoRA. A client that asked for a style and got the plain model has no way to
+    find out, so the answer here is a 400 that says what fits instead.
+    """
+    if not file_name:
+        return
+    bad = []
+    for entry in chosen:
+        verdict = lora_fit.fit(str(entry["name"]), file_name)
+        if verdict is not None and verdict["fits"] == "no":
+            bad.append(f"'{entry['name']}' — {verdict['reason']}")
+    if not bad:
+        return
+    usable = [
+        str(other["name"])
+        for other in model_files.listing(model_files.LORA_FOLDER)
+        if (fit := lora_fit.fit(str(other["name"]), file_name)) is None or fit["fits"] != "no"
+    ]
+    raise JobError(
+        f"a LoRA of this run does not fit '{file_name}': " + "; ".join(bad)
+        + f". What models/{model_files.LORA_FOLDER}/ has that it either fits or cannot judge: "
+        + f"{', '.join(usable) if usable else 'nothing'}."
+    )
 
 
 def _placeholder_names(spec: ModelSpec) -> set[str]:
