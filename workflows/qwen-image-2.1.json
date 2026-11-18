@@ -1,15 +1,27 @@
 {
  "label": "Qwen-Image 2.1 (references through the same model)",
- "defaults": {
-  "width": 1328,
-  "height": 1328
+ "sizes": {
+  "square": [
+   1328,
+   1328
+  ],
+  "portrait": [
+   1136,
+   1472
+  ],
+  "landscape": [
+   1472,
+   1136
+  ]
  },
+ "orientation": "square",
+ "model_file": "qwen_image_2.1_int8_convrot.safetensors",
  "variants": [
   {
    "refs": 0,
    "workflow": {
-    "last_node_id": 8,
-    "last_link_id": 8,
+    "last_node_id": 13,
+    "last_link_id": 14,
     "nodes": [
      {
       "id": 1,
@@ -31,7 +43,7 @@
         "name": "MODEL",
         "type": "MODEL",
         "links": [
-         1
+         9
         ]
        }
       ],
@@ -39,7 +51,7 @@
        "Node name for S&R": "UNETLoaderMultiGPU"
       },
       "widgets_values": [
-       "qwen_image_2.1_int8_convrot.safetensors",
+       "PARAM_MODEL_FILE",
        "default",
        "cuda:0"
       ],
@@ -232,7 +244,7 @@
        {
         "name": "model",
         "type": "MODEL",
-        "link": 1
+        "link": 14
        },
        {
         "name": "positive",
@@ -341,17 +353,204 @@
       "widgets_values": [
        "PARAM_STRING_OUTPUT_IMAGE_FILENAME"
       ]
+     },
+     {
+      "id": 9,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       380,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 9
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         10
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_1",
+       1.0
+      ],
+      "title": "LoRA slot 1"
+     },
+     {
+      "id": 10,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       680,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 10
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         11
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_2",
+       1.0
+      ],
+      "title": "LoRA slot 2"
+     },
+     {
+      "id": 11,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       980,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 11
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         12
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_3",
+       1.0
+      ],
+      "title": "LoRA slot 3"
+     },
+     {
+      "id": 12,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       1280,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 12
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         13
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_4",
+       1.0
+      ],
+      "title": "LoRA slot 4"
+     },
+     {
+      "id": 13,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       1580,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 13
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         14
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_5",
+       1.0
+      ],
+      "title": "LoRA slot 5"
      }
     ],
     "links": [
-     [
-      1,
-      1,
-      0,
-      6,
-      0,
-      "MODEL"
-     ],
      [
       2,
       2,
@@ -407,6 +606,54 @@
       8,
       0,
       "IMAGE"
+     ],
+     [
+      9,
+      1,
+      0,
+      9,
+      0,
+      "MODEL"
+     ],
+     [
+      10,
+      9,
+      0,
+      10,
+      0,
+      "MODEL"
+     ],
+     [
+      11,
+      10,
+      0,
+      11,
+      0,
+      "MODEL"
+     ],
+     [
+      12,
+      11,
+      0,
+      12,
+      0,
+      "MODEL"
+     ],
+     [
+      13,
+      12,
+      0,
+      13,
+      0,
+      "MODEL"
+     ],
+     [
+      14,
+      13,
+      0,
+      6,
+      0,
+      "MODEL"
      ]
     ],
     "groups": [],
@@ -418,8 +665,8 @@
   {
    "refs": 1,
    "workflow": {
-    "last_node_id": 9,
-    "last_link_id": 10,
+    "last_node_id": 14,
+    "last_link_id": 16,
     "nodes": [
      {
       "id": 1,
@@ -441,7 +688,7 @@
         "name": "MODEL",
         "type": "MODEL",
         "links": [
-         1
+         11
         ]
        }
       ],
@@ -449,7 +696,7 @@
        "Node name for S&R": "UNETLoaderMultiGPU"
       },
       "widgets_values": [
-       "qwen_image_2.1_int8_convrot.safetensors",
+       "PARAM_MODEL_FILE",
        "default",
        "cuda:0"
       ],
@@ -686,7 +933,7 @@
        {
         "name": "model",
         "type": "MODEL",
-        "link": 1
+        "link": 16
        },
        {
         "name": "positive",
@@ -795,17 +1042,204 @@
       "widgets_values": [
        "PARAM_STRING_OUTPUT_IMAGE_FILENAME"
       ]
+     },
+     {
+      "id": 10,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       380,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 11
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         12
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_1",
+       1.0
+      ],
+      "title": "LoRA slot 1"
+     },
+     {
+      "id": 11,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       680,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 12
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         13
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_2",
+       1.0
+      ],
+      "title": "LoRA slot 2"
+     },
+     {
+      "id": 12,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       980,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 13
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         14
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_3",
+       1.0
+      ],
+      "title": "LoRA slot 3"
+     },
+     {
+      "id": 13,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       1280,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 14
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         15
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_4",
+       1.0
+      ],
+      "title": "LoRA slot 4"
+     },
+     {
+      "id": 14,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       1580,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 15
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         16
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_5",
+       1.0
+      ],
+      "title": "LoRA slot 5"
      }
     ],
     "links": [
-     [
-      1,
-      1,
-      0,
-      7,
-      0,
-      "MODEL"
-     ],
      [
       2,
       3,
@@ -877,6 +1311,54 @@
       9,
       0,
       "IMAGE"
+     ],
+     [
+      11,
+      1,
+      0,
+      10,
+      0,
+      "MODEL"
+     ],
+     [
+      12,
+      10,
+      0,
+      11,
+      0,
+      "MODEL"
+     ],
+     [
+      13,
+      11,
+      0,
+      12,
+      0,
+      "MODEL"
+     ],
+     [
+      14,
+      12,
+      0,
+      13,
+      0,
+      "MODEL"
+     ],
+     [
+      15,
+      13,
+      0,
+      14,
+      0,
+      "MODEL"
+     ],
+     [
+      16,
+      14,
+      0,
+      7,
+      0,
+      "MODEL"
      ]
     ],
     "groups": [],
@@ -888,8 +1370,8 @@
   {
    "refs": 2,
    "workflow": {
-    "last_node_id": 10,
-    "last_link_id": 11,
+    "last_node_id": 15,
+    "last_link_id": 17,
     "nodes": [
      {
       "id": 1,
@@ -911,7 +1393,7 @@
         "name": "MODEL",
         "type": "MODEL",
         "links": [
-         1
+         12
         ]
        }
       ],
@@ -919,7 +1401,7 @@
        "Node name for S&R": "UNETLoaderMultiGPU"
       },
       "widgets_values": [
-       "qwen_image_2.1_int8_convrot.safetensors",
+       "PARAM_MODEL_FILE",
        "default",
        "cuda:0"
       ],
@@ -1199,7 +1681,7 @@
        {
         "name": "model",
         "type": "MODEL",
-        "link": 1
+        "link": 17
        },
        {
         "name": "positive",
@@ -1308,17 +1790,204 @@
       "widgets_values": [
        "PARAM_STRING_OUTPUT_IMAGE_FILENAME"
       ]
+     },
+     {
+      "id": 11,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       380,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 12
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         13
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_1",
+       1.0
+      ],
+      "title": "LoRA slot 1"
+     },
+     {
+      "id": 12,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       680,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 13
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         14
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_2",
+       1.0
+      ],
+      "title": "LoRA slot 2"
+     },
+     {
+      "id": 13,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       980,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 14
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         15
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_3",
+       1.0
+      ],
+      "title": "LoRA slot 3"
+     },
+     {
+      "id": 14,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       1280,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 15
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         16
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_4",
+       1.0
+      ],
+      "title": "LoRA slot 4"
+     },
+     {
+      "id": 15,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+       1580,
+       380
+      ],
+      "size": [
+       270,
+       82
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+       {
+        "name": "model",
+        "type": "MODEL",
+        "link": 16
+       }
+      ],
+      "outputs": [
+       {
+        "name": "MODEL",
+        "type": "MODEL",
+        "links": [
+         17
+        ]
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+       "PARAM_LORA_5",
+       1.0
+      ],
+      "title": "LoRA slot 5"
      }
     ],
     "links": [
-     [
-      1,
-      1,
-      0,
-      7,
-      0,
-      "MODEL"
-     ],
      [
       2,
       3,
@@ -1398,6 +2067,54 @@
       5,
       3,
       "IMAGE"
+     ],
+     [
+      12,
+      1,
+      0,
+      11,
+      0,
+      "MODEL"
+     ],
+     [
+      13,
+      11,
+      0,
+      12,
+      0,
+      "MODEL"
+     ],
+     [
+      14,
+      12,
+      0,
+      13,
+      0,
+      "MODEL"
+     ],
+     [
+      15,
+      13,
+      0,
+      14,
+      0,
+      "MODEL"
+     ],
+     [
+      16,
+      14,
+      0,
+      15,
+      0,
+      "MODEL"
+     ],
+     [
+      17,
+      15,
+      0,
+      7,
+      0,
+      "MODEL"
      ]
     ],
     "groups": [],

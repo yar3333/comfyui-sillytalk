@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import loras as loras_module
+from . import model_files
 from . import placement as placement_module
 from .params import find_placeholders, substitute
 from .workflows import ModelSpec, WorkflowError, model as load_model
@@ -62,6 +64,12 @@ class Job:
     height: int
     seed: int
     status: str = QUEUED
+    # What the client asked for, kept so the job can be read back as the request
+    # that made it: the orientation it sent and the size that came out of it,
+    # the model file the run actually loaded, the LoRAs it merged.
+    orientation: str = ""
+    model_file: str | None = None
+    loras: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
     prompt_id: str | None = None
     placement: placement_module.Placement | None = None
@@ -87,6 +95,12 @@ class Job:
         }
         if self.error:
             out["error"] = self.error
+        if self.orientation:
+            out["orientation"] = self.orientation
+        if self.model_file:
+            out["model_file"] = self.model_file
+        if self.loras:
+            out["loras"] = self.loras
         if self.placement is not None:
             out.update(self.placement.describe())
         return out
@@ -159,11 +173,18 @@ async def start(
     model_code: str,
     prompt: str,
     ref_paths: list[Path],
-    width: int,
-    height: int,
-    seed: int | None,
+    orientation: str | None = None,
+    model_file: str | None = None,
+    loras: list[dict[str, Any]] | None = None,
+    seed: int | None = None,
 ) -> Job:
-    """Builds the run's graph and puts it on the server's queue."""
+    """Builds the run's graph and puts it on the server's queue.
+
+    The client names an orientation, a model file and LoRAs; all three are
+    checked here rather than at the queue, because a name the server does not
+    have is the client's problem to fix and saying so in 400 is cheaper than a
+    failed run two minutes later.
+    """
     spec: ModelSpec | None = load_model(model_code)
     if spec is None:
         known = ", ".join(entry.code for entry in _readable_entries()) or "(none)"
@@ -173,6 +194,13 @@ async def start(
             f"the '{model_code}' workflow takes at most {spec.max_refs} reference image(s), "
             f"{len(ref_paths)} were sent"
         )
+    try:
+        width, height = spec.size_for(orientation)
+    except WorkflowError as err:
+        raise JobError(str(err)) from err
+
+    file_name = _pick_model_file(spec, model_file)
+    chosen = _pick_loras(loras or [])
 
     job = Job(
         id=str(uuid.uuid4()),
@@ -180,13 +208,16 @@ async def start(
         width=width,
         height=height,
         seed=seed if seed is not None else uuid.uuid4().int % 2147483647,
+        orientation=orientation or spec.default_orientation,
+        model_file=file_name,
         refs=list(ref_paths),
     )
     _jobs[job.id] = job
 
     try:
-        graph = _build_graph(spec, job, prompt)
-        job.placement = placement_module.place(graph)
+        graph, run = _build_graph(spec, job, prompt, file_name, chosen)
+        job.loras = run.describe()
+        job.placement = placement_module.place(graph, extra_weight=run.extra_weight())
         await _submit(graph, job)
     except Exception as err:
         job.status = FAILED
@@ -196,14 +227,91 @@ async def start(
         logger.warning("sillytalk job %s failed before the queue: %s", job.id, err)
         raise JobError(str(err)) from err
 
-    logger.info("sillytalk job %s queued (model=%s, %dx%d, %s)", job.id, spec.code, width, height, job.placement.summary())
+    logger.info(
+        "sillytalk job %s queued (model=%s, %s %dx%d, file=%s%s, %s)",
+        job.id,
+        spec.code,
+        job.orientation,
+        width,
+        height,
+        file_name,
+        f", loras={'+'.join(run.names)}" if run.names else "",
+        job.placement.summary(),
+    )
     return job
 
 
-def _build_graph(spec: ModelSpec, job: Job, prompt: str) -> dict[str, Any]:
+def _pick_model_file(spec: ModelSpec, requested: str | None) -> str | None:
+    """The diffusion file this run loads, checked against the server's folder."""
+    wanted = (requested or "").strip()
+    if not wanted:
+        return spec.model_file or None
+    if not spec.model_file and "PARAM_MODEL_FILE" not in _placeholder_names(spec):
+        raise JobError(
+            f"the '{spec.code}' workflow has no swappable model file — its loaders name their files "
+            "themselves, so there is nothing to choose"
+        )
+    if not model_files.known(model_files.DIFFUSION_FOLDER, wanted):
+        raise JobError(
+            f"this server has no '{wanted}' in models/{model_files.DIFFUSION_FOLDER}/ — it has: "
+            f"{_names(model_files.DIFFUSION_FOLDER)}. Drop the file there and ask again."
+        )
+    return wanted
+
+
+def _pick_loras(requested: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The LoRA list of a run, each name checked against models/loras/."""
+    out: list[dict[str, Any]] = []
+    for item in requested:
+        name = str((item or {}).get("name") or "").strip()
+        if not name:
+            raise JobError("a lora entry needs a 'name'")
+        if not model_files.known(model_files.LORA_FOLDER, name):
+            raise JobError(
+                f"this server has no '{name}' in models/{model_files.LORA_FOLDER}/ — it has: "
+                f"{_names(model_files.LORA_FOLDER)}. Drop the file there and ask again."
+            )
+        strength = (item or {}).get("strength")
+        out.append({"name": name, "strength": 1.0 if strength is None else float(strength)})
+    return out
+
+
+def _placeholder_names(spec: ModelSpec) -> set[str]:
+    """Every PARAM_* the workflow uses, across its variants."""
+    from .workflows import api_graph
+
+    found: set[str] = set()
+    for refs, _graph in spec.graphs:
+        try:
+            find_placeholders(api_graph(spec, refs), found)
+        except WorkflowError:
+            continue
+    return found
+
+
+def _names(folder: str) -> str:
+    listed = [entry["name"] for entry in model_files.listing(folder)]
+    if not listed:
+        return f"(the {folder} folder is empty)"
+    shown = ", ".join(listed[:20])
+    return f"{shown}{' …' if len(listed) > 20 else ''}"
+
+
+def _build_graph(
+    spec: ModelSpec,
+    job: Job,
+    prompt: str,
+    model_file: str | None,
+    loras: list[dict[str, Any]],
+) -> tuple[dict[str, Any], loras_module.LoraRun]:
     from .workflows import api_graph
 
     graph = api_graph(spec, len(job.refs))
+    # The slots are found by their placeholder, so they are resolved before it
+    # is substituted away.
+    run = loras_module.apply(
+        graph, loras, size_of=lambda name: model_files.size_of(model_files.LORA_FOLDER, name)
+    )
     values: dict[str, Any] = {
         "PARAM_PROMPT": prompt,
         "PARAM_SEED": job.seed,
@@ -211,6 +319,8 @@ def _build_graph(spec: ModelSpec, job: Job, prompt: str) -> dict[str, Any]:
         "PARAM_INT_OUTPUT_IMAGE_HEIGHT": job.height,
         "PARAM_STRING_OUTPUT_IMAGE_FILENAME": job.output_prefix,
     }
+    if model_file:
+        values["PARAM_MODEL_FILE"] = model_file
     # The reference names follow the AiPic convention the workflow files were
     # written with: one reference is unnumbered, two are numbered from one.
     if len(job.refs) == 1:
@@ -227,11 +337,12 @@ def _build_graph(spec: ModelSpec, job: Job, prompt: str) -> dict[str, Any]:
     if leftovers:
         raise JobError(
             f"the '{spec.code}' workflow asks for {', '.join(sorted(leftovers))}, which this plugin does not "
-            f"provide — a workflow file may only use PARAM_PROMPT, PARAM_SEED, "
+            f"provide — a workflow file may only use PARAM_PROMPT, PARAM_SEED, PARAM_MODEL_FILE, "
+            f"PARAM_LORA_1…{loras_module.SLOT_COUNT}/PARAM_LORA_STRENGTH_1…{loras_module.SLOT_COUNT}, "
             f"PARAM_INT_OUTPUT_IMAGE_WIDTH/_HEIGHT, PARAM_STRING_OUTPUT_IMAGE_FILENAME and "
             f"PARAM_STRING_INPUT_IMAGE_FILENAME(_1/_2)"
         )
-    return graph
+    return graph, run
 
 
 def _readable_entries():

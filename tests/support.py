@@ -47,8 +47,20 @@ def _install_stub() -> types.ModuleType:
                 return str(candidate)
         return None
 
+    def get_filename_list(folder_name: str):
+        """The folder's files by relative name, the way ComfyUI lists them."""
+        names: list[str] = []
+        for base in _MODEL_PATHS.get(folder_name, []):
+            if not base.is_dir():
+                continue
+            for candidate in base.rglob("*"):
+                if candidate.is_file() and not candidate.name.startswith("."):
+                    names.append(str(candidate.relative_to(base)))
+        return sorted(names)
+
     module.register = register
     module.get_full_path = get_full_path
+    module.get_filename_list = get_filename_list
     sys.modules["folder_paths"] = module
     return module
 

@@ -1,9 +1,21 @@
 {
  "label": "Qwen-Image 2512 (references through Qwen-Image-Edit 2511)",
- "defaults": {
-  "width": 1328,
-  "height": 1328
+ "sizes": {
+  "square": [
+   1328,
+   1328
+  ],
+  "portrait": [
+   1136,
+   1472
+  ],
+  "landscape": [
+   1472,
+   1136
+  ]
  },
+ "orientation": "square",
+ "model_file": "qwen_image_2512_fp8_e4m3fn.safetensors",
  "variants": [
   {
    "refs": 0,
@@ -39,7 +51,7 @@
        "Node name for S&R": "UNETLoaderMultiGPU"
       },
       "widgets_values": [
-       "qwen_image_2512_fp8_e4m3fn.safetensors",
+       "PARAM_MODEL_FILE",
        "default",
        "cuda:0"
       ],
@@ -569,7 +581,7 @@
        "Node name for S&R": "UNETLoaderMultiGPU"
       },
       "widgets_values": [
-       "Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors",
+       "PARAM_MODEL_FILE",
        "default",
        "cuda:0"
       ],
@@ -1299,7 +1311,7 @@
        "Node name for S&R": "UNETLoaderMultiGPU"
       },
       "widgets_values": [
-       "Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors",
+       "PARAM_MODEL_FILE",
        "default",
        "cuda:0"
       ],

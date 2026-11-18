@@ -20,10 +20,17 @@ curl -s -F model=qwen-image-2.1 \
 ```
 
 ```json
-{"job_id": "6edaa0fb-0653-4e6b-92e9-851b8666fd62", "status": "queued", "width": 1328, "height": 1328,
+{"job_id": "6edaa0fb-0653-4e6b-92e9-851b8666fd62", "status": "queued", "orientation": "square",
+ "width": 1328, "height": 1328, "model_file": "qwen_image_2.1_int8_convrot.safetensors",
+ "loras": [{"name": "my-style.safetensors", "strength": 0.6, "node": "9"}],
  "placements": [{"node": "1", "class": "UNETLoaderMultiGPU", "device": "cuda:2", "mb": 6921},
                 {"node": "2", "class": "CLIPLoaderMultiGPU", "device": "cuda:3", "mb": 10966}]}
 ```
+
+The client asks for a **shape** — `square`, `portrait` or `landscape` — and the
+answer says what that became in pixels. Every model was trained at its own
+numbers, and only this server knows them, so they live in its workflow file and
+nowhere else.
 
 ## Why the split is this way
 
@@ -59,7 +66,7 @@ Python 3.10 or newer. No dependencies beyond what ComfyUI itself uses.
 A working install says this in the log:
 
 ```
-[comfyui-sillytalk] v1.0.0 — POST /sillytalk/generate, GET /sillytalk/models
+[comfyui-sillytalk] v1.1.0 — POST /sillytalk/generate, GET /sillytalk/models
 ```
 
 and answers `GET /sillytalk/health`.
@@ -87,6 +94,35 @@ point of letting the server place them.
 Nothing here is authenticated, like the rest of a default ComfyUI install. Keep
 the server on a network you trust, as you already would for `/prompt`.
 
+### GET /sillytalk/models
+
+One entry per usable workflow, and next to each the files of this server that it
+could be pointed at:
+
+```json
+{"models": [{
+  "code": "qwen-image-2.1",
+  "label": "Qwen-Image 2.1 (references through the same model)",
+  "max_refs": 2,
+  "orientation": "square",
+  "sizes": {"square": [1328, 1328], "portrait": [1136, 1472], "landscape": [1472, 1136]},
+  "model_file": "qwen_image_2.1_int8_convrot.safetensors",
+  "model_files": {"folder": "diffusion_models",
+                  "options": [{"name": "qwen_image_2.1_int8_convrot.safetensors", "mb": 6919},
+                              {"name": "my-qwen-derivative.safetensors", "mb": 20000}]},
+  "loras": {"max": 5,
+            "options": [{"name": "my-style.safetensors", "mb": 224}]}
+}]}
+```
+
+`model_files` is only there when the workflow has a swappable file, and
+`loras.max` is the number of slots its graph wired — `0` for a workflow that takes
+no LoRAs. Both option lists are read from the server's folders (subfolders
+included, under their relative names), so a file the user drops in becomes a
+choice in the client without either side being reconfigured. The listing is cached
+for 15 seconds, which is long enough for a settings dialog to open quickly and
+short enough that a new file appears without a restart.
+
 ### POST /sillytalk/generate
 
 `multipart/form-data`:
@@ -96,8 +132,17 @@ the server on a network you trust, as you already would for `/prompt`.
 | `model` | yes | a code from `/sillytalk/models` |
 | `prompt` | yes | at most 8000 characters |
 | `image` | no | repeatable, in order. PNG, JPEG, WebP or BMP |
-| `width`, `height` | no | default to the model's own defaults |
+| `orientation` | no | `square`, `portrait` or `landscape`; defaults to the model's own. The pixels behind it are the model's, so a shape it cannot draw is a `400` that lists the ones it can |
+| `model_file` | no | a file of `models/diffusion_models/` to load instead of the one the workflow names — how a derivative someone dropped there gets used |
+| `loras` | no | a JSON array of `{"name": …, "strength": …}` (strength optional, default `1.0`), named in the order they merge. Bare strings are accepted too. At most 8 |
 | `seed` | no | a new one per job when omitted |
+
+`model_file` and `loras` are checked against the server's own folders before the
+job is queued, so a name that is not there is answered with the list that is:
+
+```json
+{"error": "this server has no 'my-qwen.safetensors' in models/diffusion_models/ — it has: qwen_image_2.1_int8_convrot.safetensors, qwen_image_2512_fp8_e4m3fn.safetensors. Drop the file there and ask again."}
+```
 
 Limits: 8 reference pictures, 32 MB each, 96 MB per request. A file whose name
 carries no supported extension is refused — a reference has to be a picture, and
@@ -107,7 +152,10 @@ saving something else under `.png` only moves the failure into the run.
 curl -s -F model=qwen-image-2512 \
         -F "prompt=turn these two objects into one calm still life" \
         -F image=@ref1.png -F image=@ref2.png \
-        -F width=1328 -F height=1328 -F seed=42 \
+        -F orientation=portrait \
+        -F model_file=my-qwen-derivative.safetensors \
+        -F 'loras=[{"name":"my-style.safetensors","strength":0.6}]' \
+        -F seed=42 \
         http://localhost:8188/sillytalk/generate
 ```
 
@@ -235,7 +283,13 @@ its extension is the model code** a client sends.
 ```json
 {
   "label": "Qwen-Image 2.1 (references through the same model)",
-  "defaults": { "width": 1328, "height": 1328 },
+  "sizes": {
+    "square": [1328, 1328],
+    "portrait": [1136, 1472],
+    "landscape": [1472, 1136]
+  },
+  "orientation": "square",
+  "model_file": "qwen_image_2.1_int8_convrot.safetensors",
   "variants": [
     { "refs": 0, "workflow": { … } },
     { "refs": 1, "workflow": { … } },
@@ -243,6 +297,19 @@ its extension is the model code** a client sends.
   ]
 }
 ```
+
+`sizes` is what the model was trained at, per shape, and it is required: a client
+sends a shape and this is the table the pixels come from. Write the numbers the
+picture actually comes back with — ComfyUI rounds a size to a multiple of 16, so
+a portrait declared `1140` is drawn `1136` wide, and a catalogue that promises
+what never arrives is worse than one that says nothing. `orientation` is the
+shape used when a request names none (default `square`); a model that lists only
+`square` answers every request with it.
+
+`model_file` is the file the graph loads by default. Naming it is what makes the
+file swappable: `/sillytalk/models` then publishes the whole folder, and a client
+can ask for another one of it. A workflow without it — one whose LoRA is welded
+in, say — keeps its own file and says so by not offering a choice.
 
 A `workflow` is either the API format (what *Save (API)* produces) or the UI
 format (what *Save* produces). UI graphs are converted once, on first use, with
@@ -262,8 +329,11 @@ value — `"PARAM_PROMPT"`, not `"a prefix PARAM_PROMPT"`.
 | --- | --- | --- |
 | `PARAM_PROMPT` | string | the prompt |
 | `PARAM_SEED` | int | the seed |
-| `PARAM_INT_OUTPUT_IMAGE_WIDTH` | int | the width |
-| `PARAM_INT_OUTPUT_IMAGE_HEIGHT` | int | the height |
+| `PARAM_MODEL_FILE` | string | a file of `models/diffusion_models/` — the workflow's own unless the request named another |
+| `PARAM_LORA_1` … `_5` | string | the LoRA of that slot, from `models/loras/` |
+| `PARAM_LORA_STRENGTH_1` … `_5` | float | its strength |
+| `PARAM_INT_OUTPUT_IMAGE_WIDTH` | int | the width the requested shape means for this model |
+| `PARAM_INT_OUTPUT_IMAGE_HEIGHT` | int | the height the requested shape means for this model |
 | `PARAM_STRING_OUTPUT_IMAGE_FILENAME` | string | `sillytalk/<job>` — for `SaveImage`'s `filename_prefix` |
 | `PARAM_STRING_INPUT_IMAGE_FILENAME` | string | the reference, for a 1-reference variant |
 | `PARAM_STRING_INPUT_IMAGE_FILENAME_1` … `_8` | string | the references, for a variant with several |
@@ -274,6 +344,48 @@ Reference values are flat file names in `input/`, because that is what a
 know is a `400` that lists what it does — a typo fails loudly at submit time
 rather than drawing a picture of the string `PARAM_PROMPT`.
 
+### LoRA slots
+
+A graph that can take LoRAs carries a chain of up to five
+`LoraLoaderModelOnly` nodes, wired one into the next between the model loader and
+everything that uses the model:
+
+```
+UNETLoaderMultiGPU → LoRA 1 → LoRA 2 → … → LoRA 5 → KSampler
+```
+
+Each holds `PARAM_LORA_N` and `PARAM_LORA_STRENGTH_N`. At submit time the plugin
+fills the first *N* slots with the LoRAs the request named and **removes the rest
+from the graph**, re-pointing whatever consumed a removed slot at the loader that
+fed it. That is what ComfyUI's own Ctrl+B does — its bypass is a client-side
+prune and relink, not a flag — and it is the only way here: `validate_prompt`
+rejects a `lora_name` that is not in the folder list, so an unused slot cannot be
+left in the prompt holding an empty string, and on a server whose `models/loras/`
+is empty there would be no valid name to leave at all.
+
+Two consequences worth knowing:
+
+- The number of slots is a property of the workflow file, and `/sillytalk/models`
+  reports it (`loras.max`), together with the files the folder holds. Ask for
+  more LoRAs than there are slots and the answer says so before anything runs.
+- A LoRA is a few hundred megabytes that has to live somewhere, so its size is
+  added to the loader node that carries it when the cards are chosen. A run with
+  three LoRAs on a big UNET can land them on different cards than the same run
+  without them, and the job's `placements` say where each one went.
+
+`strength_clip` is forced to `0` on a slot that has one. These graphs run a
+quantised text encoder that a CLIP-side merge would not survive, so a LoRA here
+only ever touches the model.
+
+One trap this server cannot see for you: a LoRA trained for a different model is
+**skipped, not refused**. ComfyUI matches its tensors by shape, and a file whose
+width is 3072 meeting a model that is 4096 wide produces a console full of
+`lora key not loaded: …` and a picture that looks exactly like the one without
+it. The job still succeeds — the plugin hands the graph to ComfyUI and gets a
+finished file back, and nothing in that answer says a merge was dropped. So when
+a LoRA appears to do nothing, the server's own console is where the answer is;
+the file name it complains about is the one that was ticked.
+
 ### Adding a model
 
 1. Build the workflow in the UI and save it. Make one variant per number of
@@ -281,8 +393,12 @@ rather than drawing a picture of the string `PARAM_PROMPT`.
    `PARAM_STRING_INPUT_IMAGE_FILENAME…`, a text encoder holding `PARAM_PROMPT`,
    a `KSampler` holding `PARAM_SEED`, and a `SaveImage` whose `filename_prefix`
    is `PARAM_STRING_OUTPUT_IMAGE_FILENAME`.
-2. Save it as `workflows/<your-model-code>.json` in the format above.
-3. Restart ComfyUI, or touch the file to drop the conversion cache, and check
+2. Put `PARAM_MODEL_FILE` in the UNET loader and add the LoRA chain described
+   under [LoRA slots](#lora-slots) if the model should take them. Both are
+   optional — leave them out and the workflow keeps its own file and no LoRAs.
+3. Save it as `workflows/<your-model-code>.json` in the format above, with its
+   `sizes` filled in from what the model was trained at.
+4. Restart ComfyUI, or touch the file to drop the conversion cache, and check
    `GET /sillytalk/models`.
 
 `scripts/import_sillytalk_workflows.py` does this for the older
@@ -317,6 +433,15 @@ kept unmodified so a future sync stays a copy and paste.
 Everything else in this repository is MIT — see [`LICENSE`](LICENSE).
 
 ## Version history
+
+**1.1.0** — The server decides the pixels, the client the shape: `width`/`height`
+are gone from the request and a workflow file carries `sizes` per orientation.
+`/sillytalk/models` publishes the contents of `models/diffusion_models/` and
+`models/loras/`, so a file the user drops in becomes selectable in SillyTalk's
+settings instead of something to type, and a run can name a `model_file` of its
+own and up to eight LoRAs with their strengths. Workflows that want LoRAs wire a
+chain of `LoraLoaderModelOnly` slots; the unused ones are taken out of the graph
+at submit time, and a LoRA's bytes count towards the card its loader lands on.
 
 **1.0.0** — First release. `/sillytalk/*` generation endpoints with server-side
 GPU placement, the workflow catalogue, the `/files/delete` and `/files/list`

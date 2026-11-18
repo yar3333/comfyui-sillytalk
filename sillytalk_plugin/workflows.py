@@ -5,13 +5,29 @@ the model code a client sends. The format:
 
     {
       "label": "Qwen-Image 2512",              // optional, for the UI
-      "defaults": { "width": 1328, "height": 1328 },
+      "sizes": {                               // what the client picks an
+        "square":    [1328, 1328],             // ORIENTATION of — the server
+        "portrait":  [1136, 1472],             // owns the pixel numbers
+        "landscape": [1472, 1136]
+      },
+      "orientation": "square",                 // used when the client says none
+      "model_file": "qwen_image_2512_fp8.safetensors",  // PARAM_MODEL_FILE's default
       "variants": [
         { "refs": 0, "workflow": { ...ComfyUI UI-format graph... } },
         { "refs": 1, "workflow": { ... } },
         { "refs": 2, "workflow": { ... } }
       ]
     }
+
+`sizes` is what a picture of this model is drawn at; the client sends
+`orientation` and gets the pair back in the job. `model_file` is the file the
+workflow's `PARAM_MODEL_FILE` loader uses when the client does not name one —
+the client may name any file of that folder, which is how a derivative of the
+model gets used without touching a workflow file.
+
+LoRA slots are not declared here: they are the `LoraLoaderModelOnly` nodes of
+the graph whose `lora_name` holds `PARAM_LORA_1`…`PARAM_LORA_5` (see
+`loras.py`). A workflow without them simply cannot take LoRAs, and says so.
 
 The graph is kept in the format ComfyUI saves, so it stays editable in the
 ComfyUI UI: open the file, drag the nodes around, save, paste the graph back
@@ -39,8 +55,9 @@ logger = logging.getLogger(__name__)
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = PLUGIN_DIR / "workflows"
 
-DEFAULT_WIDTH = 1024
-DEFAULT_HEIGHT = 1024
+# The orientations a client may ask for. Anything else is a client bug, and the
+# error names the ones this model does define.
+ORIENTATIONS = ("square", "portrait", "landscape")
 
 
 class WorkflowError(Exception):
@@ -54,10 +71,14 @@ class ModelSpec:
     code: str
     file: Path
     label: str
-    width: int
-    height: int
+    # orientation -> (width, height), in the order the file declares them.
+    sizes: tuple[tuple[str, tuple[int, int]], ...] = ()
+    default_orientation: str = "square"
+    # The file PARAM_MODEL_FILE falls back to, or None when the graph has no
+    # such placeholder and therefore offers no choice of model file.
+    model_file: str | None = None
     # refs -> the UI-format graph of that reference count, ascending.
-    graphs: tuple[tuple[int, dict[str, Any]], ...]
+    graphs: tuple[tuple[int, dict[str, Any]], ...] = ()
 
     @property
     def refs(self) -> tuple[int, ...]:
@@ -66,6 +87,17 @@ class ModelSpec:
     @property
     def max_refs(self) -> int:
         return self.graphs[-1][0] if self.graphs else -1
+
+    def size_for(self, orientation: str | None) -> tuple[int, int]:
+        """The pixel pair of one orientation, or the model's own default."""
+        wanted = orientation or self.default_orientation
+        for name, pair in self.sizes:
+            if name == wanted:
+                return pair
+        raise WorkflowError(
+            f"the model '{self.code}' has no {wanted} size; it draws "
+            f"{', '.join(f'{name} {width}x{height}' for name, (width, height) in self.sizes)}"
+        )
 
     def graph_for(self, refs: int) -> dict[str, Any]:
         for count, graph in self.graphs:
@@ -82,7 +114,9 @@ class ModelSpec:
             "label": self.label,
             "max_refs": self.max_refs,
             "refs": list(self.refs),
-            "defaults": {"width": self.width, "height": self.height},
+            "orientation": self.default_orientation,
+            "sizes": {name: [width, height] for name, (width, height) in self.sizes},
+            "model_file": self.model_file,
         }
 
 
@@ -98,8 +132,9 @@ class CatalogueEntry:
     file: str
     label: str = ""
     refs: list[int] = field(default_factory=list)
-    width: int = DEFAULT_WIDTH
-    height: int = DEFAULT_HEIGHT
+    sizes: dict[str, tuple[int, int]] = field(default_factory=dict)
+    orientation: str = "square"
+    model_file: str | None = None
     error: str | None = None
 
 
@@ -123,13 +158,29 @@ def _read_file(path: Path) -> CatalogueEntry:
         return entry
 
     entry.label = str(raw.get("label") or path.stem)
-    defaults = raw.get("defaults") or {}
-    if isinstance(defaults, dict):
-        entry.width = _positive_int(defaults.get("width"), DEFAULT_WIDTH)
-        entry.height = _positive_int(defaults.get("height"), DEFAULT_HEIGHT)
-    else:
-        entry.error = "'defaults' must be an object of width/height"
+    sizes = raw.get("sizes")
+    if not isinstance(sizes, dict) or not sizes:
+        entry.error = "'sizes' must be an object of orientation -> [width, height]"
         return entry
+    for name, pair in sizes.items():
+        if name not in ORIENTATIONS:
+            entry.error = f"sizes.{name} is not one of {', '.join(ORIENTATIONS)}"
+            return entry
+        pixels = _pixel_pair(pair)
+        if pixels is None:
+            entry.error = f"sizes.{name} must be [width, height] of positive pixels"
+            return entry
+        entry.sizes[name] = pixels
+    declared = str(raw.get("orientation") or "").strip()
+    if declared and declared not in entry.sizes:
+        entry.error = f"'orientation' is {declared}, which 'sizes' does not define"
+        return entry
+    entry.orientation = declared or ("square" if "square" in entry.sizes else next(iter(entry.sizes)))
+    model_file = raw.get("model_file")
+    if model_file is not None and not (isinstance(model_file, str) and model_file.strip()):
+        entry.error = "'model_file' must be a file name or absent"
+        return entry
+    entry.model_file = str(model_file).strip() if model_file else None
 
     variants = raw.get("variants")
     if not isinstance(variants, list) or not variants:
@@ -164,12 +215,16 @@ def _read_file(path: Path) -> CatalogueEntry:
     return entry
 
 
-def _positive_int(value: Any, fallback: int) -> int:
-    if isinstance(value, bool):
-        return fallback
-    if isinstance(value, int) and value > 0:
-        return value
-    return fallback
+def _pixel_pair(value: Any) -> tuple[int, int] | None:
+    """`[1328, 1328]` as a pair of positive pixels, or None."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    out: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            return None
+        out.append(item)
+    return out[0], out[1]
 
 
 def entries() -> list[CatalogueEntry]:
@@ -217,8 +272,9 @@ def _spec(entry: CatalogueEntry) -> ModelSpec:
         code=entry.code,
         file=path,
         label=entry.label,
-        width=entry.width,
-        height=entry.height,
+        sizes=tuple(entry.sizes.items()),
+        default_orientation=entry.orientation,
+        model_file=entry.model_file,
         graphs=tuple(sorted(graphs.items())),
     )
 

@@ -9,24 +9,52 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import TempDirTestCase
+from support import TempDirTestCase, register_model_folder
 
-from sillytalk_plugin import jobs, workflows
+from sillytalk_plugin import jobs, model_files, workflows
 from sillytalk_plugin.workflows import ModelSpec
 
+SIZES = (("square", (1328, 1328)), ("portrait", (1140, 1472)))
 
-def spec_with(graph: dict, code: str = "test-model", root: Path | None = None) -> ModelSpec:
+
+def spec_with(graph: dict, code: str = "test-model", root: Path | None = None, **extra) -> ModelSpec:
     path = (root or Path(".")) / f"{code}.json"
-    return ModelSpec(code=code, file=path, label=code, width=1024, height=1024, graphs=((0, graph),))
+    return ModelSpec(
+        code=code,
+        file=path,
+        label=code,
+        sizes=SIZES,
+        default_orientation="square",
+        graphs=((0, graph),),
+        **extra,
+    )
+
+
+def lora_chain(start: int = 20, slots: int = 3) -> dict:
+    """A model loader feeding `slots` PARAM_LORA_n slots in a chain."""
+    graph = {
+        "1": {"class_type": "UNETLoaderMultiGPU", "inputs": {"unet_name": "PARAM_MODEL_FILE", "device": "cuda:0"}},
+        "2": {"class_type": "KSampler", "inputs": {"model": [str(start + slots - 1), 0]}},
+    }
+    for index in range(slots):
+        node_id = str(start + index)
+        source = "1" if index == 0 else str(start + index - 1)
+        graph[node_id] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"model": [source, 0], "lora_name": f"PARAM_LORA_{index + 1}", "strength_model": 1.0},
+        }
+    return graph
 
 
 class BuildGraphTest(unittest.TestCase):
-    def build(self, graph: dict, refs: list[Path], prompt: str = "an apple") -> dict:
-        spec = spec_with(graph)
+    def build(self, graph: dict, refs: list[Path], prompt: str = "an apple", model_file: str | None = None,
+              loras: list[dict] | None = None) -> dict:
+        spec = spec_with(graph, model_file=model_file)
         job = jobs.Job(id="11111111-2222-3333-4444-555555555555", model=spec.code, width=1328, height=768, seed=42)
         job.refs = refs
         with mock.patch.object(workflows, "api_graph", return_value=graph):
-            return jobs._build_graph(spec, job, prompt)
+            out, _run = jobs._build_graph(spec, job, prompt, model_file, loras or [])
+        return out
 
     def test_the_run_values_land_in_the_graph(self):
         graph = {
@@ -67,6 +95,73 @@ class BuildGraphTest(unittest.TestCase):
         graph = {"1": {"class_type": "UNETLoaderMultiGPU", "inputs": {"device": "PARAM_DEVICE"}}}
         out = self.build(graph, [])
         self.assertEqual(out["1"]["inputs"]["device"], "PARAM_DEVICE", "placement overwrites it next")
+
+    def test_the_chosen_model_file_lands_in_the_loader(self):
+        graph = {"1": {"class_type": "UNETLoaderMultiGPU", "inputs": {"unet_name": "PARAM_MODEL_FILE"}}}
+        out = self.build(graph, [], model_file="my_derivative.safetensors")
+        self.assertEqual(out["1"]["inputs"]["unet_name"], "my_derivative.safetensors")
+
+
+class PickTest(TempDirTestCase):
+    """A name the server does not have is answered with the names it does, so
+    the client that offered a pick of its own still says what went wrong."""
+
+    def setUp(self):
+        super().setUp()
+        self.models = self.root / "diffusion_models"
+        self.loras = self.root / "loras"
+        for folder in (self.models, self.loras):
+            folder.mkdir()
+        (self.models / "qwen_image_2.1_int8_convrot.safetensors").write_bytes(b"x" * 10)
+        (self.loras / "style.safetensors").write_bytes(b"y" * 100)
+        register_model_folder("diffusion_models", self.models)
+        register_model_folder("loras", self.loras)
+        model_files.forget_cache()
+        self.addCleanup(model_files.forget_cache)
+
+    def test_no_request_keeps_the_workflows_own_file(self):
+        spec = spec_with({}, model_file="qwen_image_2.1_int8_convrot.safetensors")
+        self.assertEqual(jobs._pick_model_file(spec, None), "qwen_image_2.1_int8_convrot.safetensors")
+        self.assertEqual(jobs._pick_model_file(spec, "   "), "qwen_image_2.1_int8_convrot.safetensors")
+
+    def test_a_file_the_server_has_is_accepted(self):
+        spec = spec_with({}, model_file="qwen_image_2.1_int8_convrot.safetensors")
+        self.assertEqual(jobs._pick_model_file(spec, "qwen_image_2.1_int8_convrot.safetensors"),
+                         "qwen_image_2.1_int8_convrot.safetensors")
+
+    def test_a_file_that_is_not_there_lists_the_ones_that_are(self):
+        spec = spec_with({}, model_file="qwen_image_2.1_int8_convrot.safetensors")
+        with self.assertRaises(jobs.JobError) as caught:
+            jobs._pick_model_file(spec, "nope.safetensors")
+        message = str(caught.exception)
+        self.assertIn("no 'nope.safetensors'", message)
+        self.assertIn("qwen_image_2.1_int8_convrot.safetensors", message)
+
+    def test_a_workflow_without_the_placeholder_refuses_the_choice(self):
+        spec = spec_with({}, model_file=None)
+        with mock.patch.object(jobs, "_placeholder_names", return_value=set()):
+            with self.assertRaises(jobs.JobError) as caught:
+                jobs._pick_model_file(spec, "anything.safetensors")
+        self.assertIn("no swappable model file", str(caught.exception))
+
+    def test_loras_keep_their_order_and_strength(self):
+        (self.loras / "second.safetensors").write_bytes(b"z" * 10)
+        chosen = jobs._pick_loras([{"name": "second.safetensors", "strength": 0.6}, {"name": "style.safetensors"}])
+        self.assertEqual([entry["name"] for entry in chosen], ["second.safetensors", "style.safetensors"])
+        self.assertEqual(chosen[0]["strength"], 0.6)
+        self.assertEqual(chosen[1]["strength"], 1.0, "an unstated strength is a full one")
+
+    def test_an_unknown_lora_lists_the_ones_that_are(self):
+        with self.assertRaises(jobs.JobError) as caught:
+            jobs._pick_loras([{"name": "ghost.safetensors"}])
+        message = str(caught.exception)
+        self.assertIn("no 'ghost.safetensors'", message)
+        self.assertIn("style.safetensors", message)
+
+    def test_a_lora_without_a_name_is_refused(self):
+        with self.assertRaises(jobs.JobError) as caught:
+            jobs._pick_loras([{"strength": 0.5}])
+        self.assertIn("needs a 'name'", str(caught.exception))
 
 
 class ErrorTextTest(unittest.TestCase):

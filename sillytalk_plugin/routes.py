@@ -2,15 +2,18 @@
 
     GET    /sillytalk                 what this plugin is, and its endpoints
     GET    /sillytalk/health          version, catalogue, devices and free VRAM
-    GET    /sillytalk/models          the model codes a client may ask for
+    GET    /sillytalk/models          the models a client may ask for, with the
+                                      files and LoRAs this server can offer
     POST   /sillytalk/generate        multipart: prompt + model + images -> 202 job_id
     GET    /sillytalk/jobs/{id}       where the run is, and how it was placed
     GET    /sillytalk/jobs/{id}/image the finished picture (bytes)
     DELETE /sillytalk/jobs/{id}       drop it from the queue, or interrupt it
 
-The client sends a prompt, its reference pictures and a model code, and gets a
-job it polls — nothing about GPUs, sizes of model files, or the shape of a
-workflow graph crosses this boundary.
+The client sends a prompt, its reference pictures, a model code and an
+orientation — plus, when it wants them, one model file of this server's folder
+and the LoRAs to merge — and gets a job it polls. Nothing about GPUs, folder
+paths, or the shape of a workflow graph crosses this boundary: the sizes behind
+an orientation and the cards behind the weights are decided here.
 """
 
 from __future__ import annotations
@@ -23,23 +26,25 @@ from typing import Any
 
 from aiohttp import web
 
-from . import jobs, placement
+from . import jobs, model_files, placement
+from . import loras as loras_module
 from .jobs import CANCELLED, FAILED, RUNNING
 from .workflows import WORKFLOW_DIR, entries
-from .workflows import model as load_model
 from .workflows import models as catalogue_models
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 MAX_PROMPT_CHARS = 8000
 MAX_REF_FILES = 8
 MAX_REF_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_BYTES = 96 * 1024 * 1024
+# A run may stack this many LoRAs; a workflow with fewer slots says so itself.
+MAX_LORAS = 8
 ALLOWED_REF_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
                         ".bmp": "image/bmp"}
-TEXT_FIELDS = ("model", "prompt", "width", "height", "seed")
+TEXT_FIELDS = ("model", "prompt", "orientation", "model_file", "loras", "seed")
 
 
 def _json(data: Any, status: int = 200) -> web.Response:
@@ -76,7 +81,7 @@ async def index(request: web.Request) -> web.Response:
             "endpoints": [
                 "GET /sillytalk/health",
                 "GET /sillytalk/models",
-                "POST /sillytalk/generate (multipart: model, prompt, width, height, seed, image)",
+                "POST /sillytalk/generate (multipart: model, prompt, orientation, model_file, loras, seed, image)",
                 "GET /sillytalk/jobs/{job_id}",
                 "GET /sillytalk/jobs/{job_id}/image",
                 "DELETE /sillytalk/jobs/{job_id}",
@@ -115,7 +120,24 @@ async def health(request: web.Request) -> web.Response:
 
 
 async def list_models(request: web.Request) -> web.Response:
-    return _json({"models": [spec.describe() for spec in catalogue_models()]})
+    """The catalogue, with what this server can actually be pointed at.
+
+    `model_files.options` and `loras.options` are the contents of the server's
+    own folders, so the client offers a pick instead of a text field: a file the
+    user dropped in becomes selectable without either side being reconfigured.
+    `loras.max` is how many slots that model's workflow wired — 0 means it takes
+    no LoRAs at all.
+    """
+    diffusion = model_files.listing(model_files.DIFFUSION_FOLDER)
+    loras = model_files.listing(model_files.LORA_FOLDER)
+    described = []
+    for spec in catalogue_models():
+        entry = spec.describe()
+        if spec.model_file:
+            entry["model_files"] = {"folder": model_files.DIFFUSION_FOLDER, "options": diffusion}
+        entry["loras"] = {"max": loras_module.available_slots(spec), "options": loras}
+        described.append(entry)
+    return _json({"models": described})
 
 
 async def generate(request: web.Request) -> web.Response:
@@ -159,13 +181,19 @@ async def generate(request: web.Request) -> web.Response:
             return _json({"error": "the 'model' field is required"}, 400)
         if not prompt:
             return _json({"error": "the 'prompt' field is required"}, 400)
+        chosen, problem = _loras(fields.get("loras"))
+        if problem:
+            return _json({"error": problem}, 400)
 
-        spec = load_model(model_code)
-        width = _positive_int(fields.get("width"), spec.width if spec else 1024)
-        height = _positive_int(fields.get("height"), spec.height if spec else 1024)
-        seed = _seed(fields.get("seed"))
-
-        job = await jobs.start(model_code, prompt, refs, width, height, seed)
+        job = await jobs.start(
+            model_code,
+            prompt,
+            refs,
+            orientation=(fields.get("orientation") or "").strip() or None,
+            model_file=(fields.get("model_file") or "").strip() or None,
+            loras=chosen,
+            seed=_seed(fields.get("seed")),
+        )
         started = True
         return _json(job.describe(), 202)
     except jobs.JobError as err:
@@ -209,12 +237,40 @@ async def _save_ref(part, index_of_ref: int, token: str):
     return target
 
 
-def _positive_int(value: str | None, fallback: int) -> int:
+def _loras(raw: str | None) -> tuple[list[dict[str, Any]] | None, str]:
+    """The `loras` field: a JSON array of `{"name": …, "strength": …}`.
+
+    A JSON string rather than repeated parts because a name and its strength
+    belong together — two parallel lists would let a client send three names and
+    two strengths, and the pairing would be the server's guess.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return [], ""
     try:
-        parsed = int(str(value))
-    except (TypeError, ValueError):
-        return fallback
-    return parsed if parsed > 0 else fallback
+        parsed = json.loads(text)
+    except json.JSONDecodeError as err:
+        return None, f"the 'loras' field is not valid JSON: {err}"
+    if not isinstance(parsed, list):
+        return None, "the 'loras' field must be a JSON array of {name, strength}"
+    if len(parsed) > MAX_LORAS:
+        return None, f"no more than {MAX_LORAS} LoRAs in one run"
+    out: list[dict[str, Any]] = []
+    for item in parsed:
+        if isinstance(item, str):
+            out.append({"name": item})
+            continue
+        if isinstance(item, dict) and item.get("name"):
+            entry: dict[str, Any] = {"name": str(item["name"])}
+            if item.get("strength") is not None:
+                try:
+                    entry["strength"] = float(item["strength"])
+                except (TypeError, ValueError):
+                    return None, f"the strength of {item['name']} is not a number"
+            out.append(entry)
+            continue
+        return None, "every entry of 'loras' needs a name"
+    return out, ""
 
 
 def _seed(value: str | None) -> int | None:

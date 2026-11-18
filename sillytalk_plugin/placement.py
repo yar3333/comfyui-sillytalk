@@ -365,8 +365,16 @@ def _one_device_for(files: list[Path], lookup) -> str | None:
     return found.pop() if len(found) == 1 else None
 
 
-def place(graph: dict[str, Any], headroom: int | None = None) -> Placement:
+def place(
+    graph: dict[str, Any],
+    headroom: int | None = None,
+    extra_weight: dict[str, int] | None = None,
+) -> Placement:
     """Writes a `device` into every loader of `graph` (in place) and reports how.
+
+    `extra_weight` adds bytes to a node that does not carry the file itself — a
+    LoRA merged into a model costs memory on the card that model lives on, and
+    the LoRA node has no device of its own to be placed with.
 
     A graph with no device inputs and a server with no visible GPU both come
     back without an error: there is nothing to decide, and refusing to draw
@@ -414,6 +422,7 @@ def place(graph: dict[str, Any], headroom: int | None = None) -> Placement:
         return where[0] if where else None
 
     for size, node_id, node, class_type, files in prepared:
+        bonus = (extra_weight or {}).get(node_id, 0)
         # The cheapest load is the one already done: keep a model on the card
         # that holds it and the run costs nothing for it.
         resident = _one_device_for(files, resident_device_of)
@@ -426,7 +435,7 @@ def place(graph: dict[str, Any], headroom: int | None = None) -> Placement:
                     node=node_id,
                     class_type=class_type,
                     device=resident,
-                    weight_bytes=0,
+                    weight_bytes=bonus,
                     note="weights already resident on this device",
                 )
             )
@@ -440,13 +449,13 @@ def place(graph: dict[str, Any], headroom: int | None = None) -> Placement:
                     node=node_id,
                     class_type=class_type,
                     device=already,
-                    weight_bytes=0,
+                    weight_bytes=bonus,
                     note="weights already placed by another node of this run",
                 )
             )
             continue
 
-        wanted = sum(_size_of(path) for path in files if path not in device_of_file)
+        wanted = sum(_size_of(path) for path in files if path not in device_of_file) + bonus
         if size == largest:
             wanted += reserve
         candidate = max(devices, key=lambda device: (device.left, device.id))

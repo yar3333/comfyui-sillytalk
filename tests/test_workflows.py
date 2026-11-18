@@ -17,9 +17,18 @@ from support import PLUGIN_DIR  # noqa: F401  (puts the plugin on sys.path)
 
 from sillytalk_plugin import workflows
 
+SIZES = {"square": [1328, 1328], "portrait": [1140, 1472], "landscape": [1472, 1140]}
+
 
 def api_graph(text: str = "hello") -> dict:
     return {"1": {"class_type": "CLIPTextEncode", "inputs": {"text": text}}}
+
+
+def model_data(**extra) -> dict:
+    """One readable catalogue file, with the two fields every model needs."""
+    data = {"sizes": SIZES, "variants": [{"refs": 0, "workflow": api_graph()}]}
+    data.update(extra)
+    return data
 
 
 class CatalogueTest(unittest.TestCase):
@@ -38,12 +47,19 @@ class CatalogueTest(unittest.TestCase):
         path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
         return path
 
-    def test_reads_variants_and_defaults(self):
+    def error_of(self, code: str) -> str:
+        entry = next(item for item in workflows.entries() if item.code == code)
+        self.assertIsNotNone(entry.error, f"{code} was expected to be unusable")
+        return entry.error or ""
+
+    def test_reads_variants_sizes_and_the_default_file(self):
         self.write(
             "my-model",
             {
                 "label": "My Model",
-                "defaults": {"width": 1328, "height": 1328},
+                "sizes": SIZES,
+                "orientation": "portrait",
+                "model_file": "my_derivative.safetensors",
                 "variants": [
                     {"refs": 2, "workflow": api_graph()},
                     {"refs": 0, "workflow": api_graph()},
@@ -54,45 +70,82 @@ class CatalogueTest(unittest.TestCase):
         self.assertIsNotNone(spec)
         self.assertEqual(spec.refs, (0, 2), "the variants come back ordered by reference count")
         self.assertEqual(spec.max_refs, 2)
-        self.assertEqual(spec.width, 1328)
-        self.assertEqual(spec.describe()["label"], "My Model")
+        self.assertEqual(spec.size_for("portrait"), (1140, 1472))
+        self.assertEqual(spec.size_for(None), (1140, 1472), "the file's orientation is the default")
+        self.assertEqual(spec.model_file, "my_derivative.safetensors")
+        described = spec.describe()
+        self.assertEqual(described["label"], "My Model")
+        self.assertEqual(described["sizes"], {"square": [1328, 1328], "portrait": [1140, 1472], "landscape": [1472, 1140]})
+        self.assertEqual(described["orientation"], "portrait")
+        self.assertEqual(described["model_file"], "my_derivative.safetensors")
+
+    def test_square_is_the_default_orientation_when_the_file_names_none(self):
+        self.write("plain", model_data())
+        spec = workflows.model("plain")
+        self.assertEqual(spec.size_for(None), (1328, 1328))
+        self.assertIsNone(spec.model_file, "a file without model_file offers no choice of file")
+
+    def test_the_first_declared_size_is_the_default_when_there_is_no_square(self):
+        self.write("tall", model_data(sizes={"landscape": [1472, 1140]}))
+        self.assertEqual(workflows.model("tall").size_for(None), (1472, 1140))
+
+    def test_an_unknown_orientation_is_said_with_the_ones_that_exist(self):
+        self.write("plain", model_data())
+        spec = workflows.model("plain")
+        with self.assertRaises(workflows.WorkflowError) as caught:
+            spec.size_for("diagonal")
+        message = str(caught.exception)
+        self.assertIn("no diagonal size", message)
+        self.assertIn("square 1328x1328", message)
+
+    def test_sizes_are_required(self):
+        self.write("sizeless", {"variants": [{"refs": 0, "workflow": api_graph()}]})
+        self.assertIn("'sizes' must be an object", self.error_of("sizeless"))
+
+    def test_an_orientation_nobody_draws_is_an_error(self):
+        self.write("odd", model_data(sizes={"diagonal": [1000, 1000]}))
+        self.assertIn("diagonal", self.error_of("odd"))
+
+    def test_a_size_that_is_not_two_pixels_is_an_error(self):
+        self.write("bad", model_data(sizes={"square": [1328]}))
+        self.assertIn("sizes.square", self.error_of("bad"))
+        self.write("worse", model_data(sizes={"square": [0, 0]}))
+        self.assertIn("sizes.square", self.error_of("worse"))
+
+    def test_an_orientation_the_sizes_do_not_define_is_an_error(self):
+        self.write("lying", model_data(sizes={"square": [1328, 1328]}, orientation="portrait"))
+        self.assertIn("does not define", self.error_of("lying"))
 
     def test_model_codes_are_sorted(self):
-        self.write("b-model", {"variants": [{"refs": 0, "workflow": api_graph()}]})
-        self.write("a-model", {"variants": [{"refs": 0, "workflow": api_graph()}]})
+        self.write("b-model", model_data())
+        self.write("a-model", model_data())
         self.assertEqual([spec.code for spec in workflows.models()], ["a-model", "b-model"])
 
     def test_broken_file_is_reported_not_raised(self):
         self.write("broken", "{ not json")
         self.assertIsNone(workflows.model("broken"))
-        entry = next(item for item in workflows.entries() if item.code == "broken")
-        self.assertIn("not valid JSON", entry.error)
+        self.assertIn("not valid JSON", self.error_of("broken"))
 
     def test_missing_variants_is_an_error(self):
-        self.write("empty", {"defaults": {}, "variants": []})
-        entry = next(item for item in workflows.entries() if item.code == "empty")
-        self.assertIn("non-empty list", entry.error)
+        self.write("empty", model_data(variants=[]))
+        self.assertIn("non-empty list", self.error_of("empty"))
 
     def test_duplicate_reference_count_is_an_error(self):
-        self.write(
-            "twice",
-            {"variants": [{"refs": 1, "workflow": api_graph()}, {"refs": 1, "workflow": api_graph()}]},
-        )
-        entry = next(item for item in workflows.entries() if item.code == "twice")
-        self.assertIn("two variants", entry.error)
+        self.write("twice", model_data(variants=[{"refs": 1, "workflow": api_graph()}, {"refs": 1, "workflow": api_graph()}]))
+        self.assertIn("two variants", self.error_of("twice"))
 
     def test_a_graph_that_is_not_a_graph_is_an_error(self):
-        self.write("nograph", {"variants": [{"refs": 0, "workflow": {"note": "nothing here"}}]})
-        entry = next(item for item in workflows.entries() if item.code == "nograph")
-        self.assertIn("neither", entry.error)
+        self.write("nograph", model_data(variants=[{"refs": 0, "workflow": {"note": "nothing here"}}]))
+        self.assertIn("neither", self.error_of("nograph"))
 
     def test_unknown_and_pathish_codes_are_refused(self):
+        self.write("plain", model_data())
         self.assertIsNone(workflows.model("nope"))
         self.assertIsNone(workflows.model("../config"))
         self.assertIsNone(workflows.model("a/b"))
 
     def test_api_graph_hands_out_a_copy(self):
-        self.write("copy", {"variants": [{"refs": 0, "workflow": api_graph("original")}]})
+        self.write("copy", model_data(variants=[{"refs": 0, "workflow": api_graph("original")}]))
         spec = workflows.model("copy")
         first = workflows.api_graph(spec, 0)
         first["1"]["inputs"]["text"] = "mutated by the run"
@@ -100,7 +153,7 @@ class CatalogueTest(unittest.TestCase):
         self.assertEqual(second["1"]["inputs"]["text"], "original")
 
     def test_variant_without_its_reference_count_says_so(self):
-        self.write("text-only", {"variants": [{"refs": 0, "workflow": api_graph()}]})
+        self.write("text-only", model_data())
         spec = workflows.model("text-only")
         with self.assertRaises(workflows.WorkflowError) as caught:
             spec.graph_for(1)
