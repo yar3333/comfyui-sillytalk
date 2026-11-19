@@ -25,7 +25,11 @@ What it can and cannot say:
   of LoRA files varies (peft, DCNV3, diffusers) and this module deliberately
   understands the common few. Unknown LoRAs are allowed and flagged, because
   refusing a file this code simply did not recognise would be worse than letting
-  a person use it.
+  a person use it;
+* a LoRA that fits some layers and names others this model does not have at all is
+  allowed too, with the count in its reason — the style lands, just not all of it.
+  The two spellings of the Qwen-Image 2.1 MLP do not count as a gap when the LoRA
+  carries both, since then the change reaches the model either way.
 """
 
 from __future__ import annotations
@@ -54,6 +58,15 @@ _SUFFIX_RE = re.compile(r"(\.weight|\.bias|_scale)$")
 
 # A LoRA for the text encoder rather than the diffusion model.
 _TEXT_PREFIXES = ("text_encoders.", "lora_te", "text_encoder.")
+
+# Qwen-Image 2.1 spells one SwiGLU block two ways (`comfy/ldm/qwen_image21/model.py`):
+# a checkpoint carries either the fused `gate_up` or the split `gate_layer` + `proj`,
+# and ComfyUI builds the model to match the file, so a LoRA naming the other spelling
+# has keys this model cannot answer. A LoRA carrying *both* spellings is complete on
+# either checkpoint — that is what the union files people convert with `lora_both_mlp.py`
+# look like — so its other-spelling keys are not a gap worth warning about.
+_MLP_FUSED = ".img_mlp.gate_up"
+_MLP_SPLIT = (".img_mlp.gate_layer", ".img_mlp.proj")
 
 # A header claiming to be bigger than this is not a header.
 _MAX_HEADER = 64 * 1024 * 1024
@@ -104,12 +117,16 @@ def fit(lora_name: str, model_name: str) -> dict[str, Any] | None:
 def _judge(targets: dict[str, tuple[int, int]], shapes: dict[str, tuple[int, int]]) -> dict[str, Any]:
     matched = 0
     mismatched = 0
+    absent: list[str] = []
+    matched_bases: set[str] = set()
     for base, (lora_in, lora_out) in targets.items():
         own = shapes.get(base)
         if own is None:
+            absent.append(base)
             continue
         if own == (lora_out, lora_in):
             matched += 1
+            matched_bases.add(base)
         else:
             mismatched += 1
 
@@ -142,16 +159,21 @@ def _judge(targets: dict[str, tuple[int, int]], shapes: dict[str, tuple[int, int
             ),
         }
     if matched:
-        verb, pronoun = _agreement(mismatched)
-        return {
-            "fits": "yes",
-            "matched": matched,
-            "mismatched": mismatched,
-            "reason": ""
-            if not mismatched
-            else f"{mismatched} of the layers it names {verb} at a different size and ComfyUI will "
-            f"skip {pronoun}",
-        }
+        reason = ""
+        if mismatched:
+            verb, pronoun = _agreement(mismatched)
+            reason = f"{mismatched} of the layers it names {verb} at a different size and ComfyUI will " \
+                     f"skip {pronoun}"
+        # A layer the model does not have at all is not a refusal — the rest merges — but
+        # it is a weaker style than the one asked for, and ComfyUI says so only on the
+        # console. The other spelling of the MLP is not counted: that part does land.
+        gaps = [base for base in absent if not _spelled_the_other_way(base, matched_bases)]
+        if gaps:
+            verb, pronoun = _agreement(len(gaps))
+            part = f"{len(gaps)} of the layers it names {verb} not in this model at all and ComfyUI will " \
+                   f"skip {pronoun}"
+            reason = f"{reason}; {part}" if reason else part
+        return {"fits": "yes", "matched": matched, "mismatched": mismatched, "reason": reason}
     return {
         "fits": "unknown",
         "matched": 0,
@@ -163,6 +185,22 @@ def _judge(targets: dict[str, tuple[int, int]], shapes: dict[str, tuple[int, int
 def _agreement(count: int) -> tuple[str, str]:
     """The verb and the pronoun that read correctly after `count` layers."""
     return ("is", "it") if count == 1 else ("are", "them")
+
+
+def _spelled_the_other_way(base: str, matched: set[str]) -> bool:
+    """Whether a missing MLP layer is the same block already matched under its other name.
+
+    Only when the LoRA carries both spellings can one be absent while the other matched,
+    and then the change does reach the model through the spelling it has, so saying
+    "skipped" would be a false alarm on a file that is fully covered.
+    """
+    if base.endswith(_MLP_FUSED):
+        head = base[: -len(_MLP_FUSED)]
+        return all(head + name in matched for name in _MLP_SPLIT)
+    for name in _MLP_SPLIT:
+        if base.endswith(name):
+            return base[: -len(name)] + _MLP_FUSED in matched
+    return False
 
 
 def _signature(path: Path) -> tuple[int, int] | None:

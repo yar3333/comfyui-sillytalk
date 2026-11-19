@@ -72,6 +72,47 @@ class FitTest(TempDirTestCase):
         self.assertIn("2 of the layers it names are at a size this model does not have while 1 fits",
                       verdict["reason"])
 
+    def test_a_layer_this_model_does_not_have_at_all_is_said_and_not_refused(self):
+        """The rest merges, so it is no reason to refuse — but the style is weaker than asked
+        and ComfyUI mentions it on the console only."""
+        asked = {f"transformer_blocks.{i}.{layer}": (4096, 4096)
+                 for i in range(2) for layer in ("attn.to_q", "attn.to_k", "img_mlp.gate_up")}
+        verdict = self.judge(asked, {k: v for k, v in asked.items() if "gate_up" not in k})
+        self.assertEqual(verdict["fits"], "yes")
+        self.assertEqual((verdict["matched"], verdict["mismatched"]), (4, 0))
+        self.assertEqual(verdict["reason"],
+                         "2 of the layers it names are not in this model at all and ComfyUI will skip them")
+
+    def test_a_lora_carrying_both_spellings_of_the_mlp_is_whole_on_either_model(self):
+        """Qwen-Image 2.1 has checkpoints with a fused `gate_up` and ones with `gate_layer` +
+        `proj`. A LoRA carrying both is complete on either, so the spelling the loaded file
+        does not use must not be reported as skipped."""
+        attn = {"transformer_blocks.0.attn.to_q": (4096, 4096)}
+        both = dict(attn, **{f"transformer_blocks.0.img_mlp.{n}": (4096, 4096)
+                             for n in ("gate_up", "gate_layer", "proj")})
+        for layout, model_layers in (("fused", dict(attn, **{"transformer_blocks.0.img_mlp.gate_up": (4096, 4096)})),
+                                     ("split", dict(attn, **{f"transformer_blocks.0.img_mlp.{n}": (4096, 4096)
+                                                             for n in ("gate_layer", "proj")}))):
+            with self.subTest(layout=layout):
+                lora_fit.forget_cache()
+                verdict = self.judge(both, model_layers)
+                self.assertEqual(verdict["fits"], "yes")
+                self.assertEqual(verdict["reason"], "", f"the {layout} model covers it through one spelling")
+
+    def test_half_of_the_split_mlp_is_not_the_other_spelling_and_is_still_a_gap(self):
+        asked = {f"transformer_blocks.0.img_mlp.{n}": (4096, 4096) for n in ("gate_up", "gate_layer", "proj")}
+        verdict = self.judge(asked, {"transformer_blocks.0.img_mlp.gate_layer": (4096, 4096)})
+        self.assertEqual(verdict["fits"], "yes")
+        self.assertIn("2 of the layers it names are not in this model at all", verdict["reason"])
+
+    def test_a_stale_size_and_a_missing_layer_are_both_said(self):
+        verdict = self.judge({"a.to_q": (4096, 4096), "b.to_q": (3072, 3072), "c.to_k": (4096, 4096)},
+                             {"a.to_q": (4096, 4096), "b.to_q": (4096, 4096)})
+        self.assertEqual(verdict["fits"], "yes")
+        self.assertEqual(verdict["reason"],
+                         "1 of the layers it names is at a different size and ComfyUI will skip it; "
+                         "1 of the layers it names is not in this model at all and ComfyUI will skip it")
+
     def test_a_text_encoder_lora_changes_nothing_here_and_is_refused(self):
         """These graphs merge into the model only; strength_clip is fixed at 0."""
         layers = {f"text_encoders.clip_l.layers.{i}.attn.q": (1024, 1024) for i in range(2)}

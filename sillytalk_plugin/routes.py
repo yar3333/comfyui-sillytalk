@@ -34,7 +34,7 @@ from .workflows import models as catalogue_models
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 MAX_PROMPT_CHARS = 8000
 MAX_REF_FILES = 8

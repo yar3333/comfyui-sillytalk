@@ -127,8 +127,10 @@ for 15 seconds, which is long enough for a settings dialog to open quickly and
 short enough that a new file appears without a restart.
 
 Each LoRA also answers, per model file, whether it would merge into that one —
-see [Which LoRA fits which file](#which-lora-fits-which-file). `fits` is absent
-for a pair whose headers could not be read, which is not a verdict; a LoRA with no
+see [Which LoRA fits which file](#which-lora-fits-which-file). `reason` is the
+sentence the client shows and is present whenever there is one to show: for a `no`,
+for an `unknown`, and for a `yes` that would land only partly. `fits` is absent for
+a pair whose headers could not be read, which is not a verdict; a LoRA with no
 `fits` at all is offered as before.
 
 ### POST /sillytalk/generate
@@ -423,7 +425,7 @@ Three answers, and the difference between the last two is the whole design:
 
 | | meaning | what happens |
 | --- | --- | --- |
-| `yes` | every layer it names, the model has at that size | merged; a note when a few of them are stale and ComfyUI will skip those |
+| `yes` | of the layers it names that this model has, all are at that size | merged; a note naming what ComfyUI will skip — a layer at a stale size, or one this model does not have at all |
 | `no` | proof it is for another file: more named layers at the wrong size than at the right one, or every target a text encoder | refused with a `400`, greyed in the client with the reason |
 | `unknown` | none of its layer names occur in this model | allowed, and flagged |
 
@@ -442,6 +444,26 @@ The rule that weighs wrong against right is deliberately not "any mismatch
 refuses". A LoRA that fits 700 layers and carries 1 stale tensor merges fine —
 ComfyUI skips the one — and refusing it would be this check's own false alarm.
 Zero fitting against 128 wrong is the silent no-op, and that is what gets refused.
+
+A `yes` can still be a partial LoRA, and says so. A file naming 192 layers of a
+model that has 160 of them merges and draws, just with less of the style than was
+asked for, and ComfyUI mentions it only on the console — so the reason counts the
+layers that will be skipped. One thing is deliberately not counted: the two
+spellings of the Qwen-Image 2.1 MLP. A checkpoint carries either a fused
+`img_mlp.gate_up` or a split `gate_layer` + `proj`, and ComfyUI builds the model to
+match the file it loaded (`model_detection.py` sets `fused_mlp = gate_up is not
+None`), so a LoRA naming both spellings is complete on either checkpoint and its
+unused keys are not a gap.
+
+`scripts/lora_both_mlp.py` makes such a file out of a single-spelling one. The two
+spellings are the same SwiGLU — `comfy/ops.py` reads a fused tensor as
+`gate, up = x.chunk(2, dim=-1)`, the split path computes
+`out(F.silu(gate_layer(x)) * proj(x))` — so a fused `lora_B` splits along its
+output rows, first half the gate, and the same `lora_A` serves both halves. That is
+exact rather than approximate: ΔW = B @ A, and the two halves of B are exactly the
+two halves of ΔW. Measured on three real LoRAs: 160 of 224 layers on a split
+checkpoint before, 224 of 224 after, and 192 of 192 on a fused one, for 34 MB on an
+80 MB file.
 
 ### Adding a model
 
@@ -490,6 +512,12 @@ kept unmodified so a future sync stays a copy and paste.
 Everything else in this repository is MIT — see [`LICENSE`](LICENSE).
 
 ## Version history
+
+**1.2.1** — A `yes` that is only part of a LoRA says which layers it loses, and
+`scripts/lora_both_mlp.py` writes a LoRA carrying both spellings of the
+Qwen-Image 2.1 MLP — the fused `img_mlp.gate_up` and the split `gate_layer` +
+`proj` — so one file merges completely into either kind of checkpoint. The two
+spellings are not counted as a gap when a LoRA carries both.
 
 **1.2.0** — The plugin decides which LoRA fits which file. It reads the
 safetensors headers of both — a few hundred kilobytes, no torch — and says `yes`,
