@@ -17,7 +17,11 @@ so a fused LoRA's B splits in half along its output rows and the same A serves b
 ΔW = B @ A, and B's first half is the gate. Exact, not an approximation, same rank.
 
 Writing both layouts into one file costs a few tens of megabytes and makes the LoRA
-complete on either checkpoint: the keys a model does not have are never looked up.
+complete on either checkpoint. The spelling the loaded model does not use is skipped,
+and ComfyUI says so: one `lora key not loaded` line per tensor of it — measured on a
+32-block LoRA at 64 lines on a split checkpoint and 128 on a fused one, on the first
+load of a run and none after, since the merged model is cached. Noise on the console,
+not a lost part of the style: the same runs skipped exactly those and nothing else.
 
     <comfyui>/.venv/bin/python scripts/lora_both_mlp.py <lora.safetensors> [more…]
 

@@ -465,6 +465,14 @@ two halves of ΔW. Measured on three real LoRAs: 160 of 224 layers on a split
 checkpoint before, 224 of 224 after, and 192 of 192 on a fused one, for 34 MB on an
 80 MB file.
 
+Drawn through on a live server both ways — 52 s on the split `REDQW21`, 58 s on the
+fused `qwen_image_2.1_int8_convrot` — and each skipped exactly the tensors of the
+spelling that model does not use and nothing else: 64 `lora key not loaded` lines on
+the split one, 128 on the fused one, once per run rather than per step since the
+merged model is cached. Those lines name keys ComfyUI has no place for; the change
+itself lands whole, which is the other side of the single-spelling file, whose 32
+skipped layers are part of the style.
+
 ### Adding a model
 
 1. Build the workflow in the UI and save it. Make one variant per number of
