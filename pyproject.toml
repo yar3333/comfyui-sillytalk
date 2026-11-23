@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-sillytalk"
 description = "ComfyUI custom node that generates pictures for the SillyTalk chat app: a prompt, reference images and a model code in, a finished PNG out — the server picks which GPU runs it"
-version = "1.2.1"
+version = "1.3.0"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

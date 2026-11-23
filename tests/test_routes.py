@@ -166,6 +166,17 @@ class GenerateTest(TempDirTestCase):
         self.assertIsNone(sent["orientation"], "the model's own default is the job's business, not the route's")
         self.assertIsNone(sent["model_file"])
         self.assertEqual(sent["loras"], [])
+        self.assertIsNone(sent["steps"], "the workflow's wired count is the default, so the route sends nothing")
+
+    async def test_the_step_count_is_passed_on_as_a_number(self):
+        response = await self.post(field("model", "m"), field("prompt", "an apple"), field("steps", "8"))
+        self.assertEqual(response.status, 202)
+        self.assertEqual(self.sent()["steps"], 8)
+
+    async def test_steps_that_are_not_a_whole_number_are_refused(self):
+        response = await self.post(field("model", "m"), field("prompt", "an apple"), field("steps", "many"))
+        self.assertEqual(response.status, 400)
+        self.assertIn("whole number", response.body.decode())
 
     async def test_loras_that_are_not_json_are_refused_with_what_the_field_wants(self):
         response = await self.post(field("model", "m"), field("prompt", "an apple"), field("loras", "style.safetensors"))
@@ -229,6 +240,15 @@ class CatalogueTest(TempDirTestCase):
         self.assertEqual([entry["name"] for entry in model["model_files"]["options"]], ["base.safetensors"])
         self.assertEqual([entry["name"] for entry in model["loras"]["options"]], ["style.safetensors"])
         self.assertEqual(model["loras"]["max"], 5)
+
+    async def test_a_model_that_offers_steps_publishes_the_range_and_the_graph_default(self):
+        spec = swappable_spec()
+        described = spec.describe()
+        described["steps"] = {"min": 4, "max": 50}
+        spec.describe = lambda: described
+        with mock.patch.object(routes, "steps_default", return_value=25):
+            body = await self.get([spec])
+        self.assertEqual(body["models"][0]["steps"], {"min": 4, "max": 50, "default": 25})
 
     async def test_a_workflow_without_a_swappable_file_says_there_is_none(self):
         spec = SimpleNamespace(code="m", model_file=None,

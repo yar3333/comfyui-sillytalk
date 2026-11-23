@@ -16,6 +16,10 @@
  },
  "orientation": "square",
  "model_file": "qwen_image_2.1_int8_convrot.safetensors",
+ "steps": {
+  "min": 4,
+  "max": 50
+ },
  "variants": [
   {
    "refs": 0,

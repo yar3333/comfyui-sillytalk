@@ -49,12 +49,15 @@ def lora_chain(start: int = 20, slots: int = 3) -> dict:
 
 class BuildGraphTest(unittest.TestCase):
     def build(self, graph: dict, refs: list[Path], prompt: str = "an apple", model_file: str | None = None,
-              loras: list[dict] | None = None) -> dict:
-        spec = spec_with(graph, model_file=model_file)
-        job = jobs.Job(id="11111111-2222-3333-4444-555555555555", model=spec.code, width=1328, height=768, seed=42)
+              loras: list[dict] | None = None, steps: int | None = None,
+              steps_range: tuple[int, int] | None = None) -> dict:
+        spec = spec_with(graph, model_file=model_file, steps_range=steps_range)
+        job = jobs.Job(id="11111111-2222-3333-4444-555555555555", model=spec.code, width=1328, height=768, seed=42,
+                       steps=steps)
         job.refs = refs
         with mock.patch.object(workflows, "api_graph", return_value=graph):
             out, _run = jobs._build_graph(spec, job, prompt, model_file, loras or [])
+        self.job = job
         return out
 
     def test_the_run_values_land_in_the_graph(self):
@@ -96,6 +99,42 @@ class BuildGraphTest(unittest.TestCase):
         graph = {"1": {"class_type": "UNETLoaderMultiGPU", "inputs": {"unet_name": "PARAM_MODEL_FILE"}}}
         out = self.build(graph, [], model_file="my_derivative.safetensors")
         self.assertEqual(out["1"]["inputs"]["unet_name"], "my_derivative.safetensors")
+
+    def test_no_request_keeps_the_steps_the_workflow_wires(self):
+        graph = {"2": {"class_type": "KSampler", "inputs": {"seed": "PARAM_SEED", "steps": 25}}}
+        out = self.build(graph, [], steps_range=(4, 50))
+        self.assertEqual(out["2"]["inputs"]["steps"], 25)
+        self.assertEqual(self.job.steps, 25, "the job says what it actually ran with")
+
+    def test_the_requested_steps_are_written_into_every_sampler(self):
+        graph = {
+            "2": {"class_type": "KSampler", "inputs": {"seed": "PARAM_SEED", "steps": 25}},
+            "3": {"class_type": "KSamplerAdvanced", "inputs": {"steps": 25}},
+        }
+        out = self.build(graph, [], steps=8, steps_range=(4, 50))
+        self.assertEqual(out["2"]["inputs"]["steps"], 8)
+        self.assertEqual(out["3"]["inputs"]["steps"], 8)
+        self.assertEqual(self.job.steps, 8)
+
+    def test_steps_outside_the_catalogue_range_are_refused_with_the_range(self):
+        graph = {"2": {"class_type": "KSampler", "inputs": {"steps": 4}}}
+        with self.assertRaises(jobs.JobError) as caught:
+            self.build(graph, [], steps=25, steps_range=(4, 4))
+        self.assertIn("exactly 4 steps", str(caught.exception))
+        self.assertIn("25 was asked for", str(caught.exception))
+
+    def test_a_model_without_a_steps_range_refuses_the_choice(self):
+        graph = {"2": {"class_type": "KSampler", "inputs": {"steps": 25}}}
+        with self.assertRaises(jobs.JobError) as caught:
+            self.build(graph, [], steps=8)
+        self.assertIn("does not offer a choice of steps", str(caught.exception))
+
+    def test_a_graph_whose_own_steps_sit_outside_its_range_is_refused(self):
+        graph = {"2": {"class_type": "KSampler", "inputs": {"steps": 100}}}
+        with self.assertRaises(jobs.JobError) as caught:
+            self.build(graph, [], steps_range=(4, 50))
+        self.assertIn("wires 100 steps", str(caught.exception))
+        self.assertIn("outside the 4 to 50 steps", str(caught.exception))
 
 
 class PickTest(TempDirTestCase):

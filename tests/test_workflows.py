@@ -24,6 +24,10 @@ def api_graph(text: str = "hello") -> dict:
     return {"1": {"class_type": "CLIPTextEncode", "inputs": {"text": text}}}
 
 
+def sampler_graph(steps: int) -> dict:
+    return {"2": {"class_type": "KSampler", "inputs": {"seed": 1, "steps": steps}}}
+
+
 def model_data(**extra) -> dict:
     """One readable catalogue file, with the two fields every model needs."""
     data = {"sizes": SIZES, "variants": [{"refs": 0, "workflow": api_graph()}]}
@@ -115,6 +119,41 @@ class CatalogueTest(unittest.TestCase):
     def test_an_orientation_the_sizes_do_not_define_is_an_error(self):
         self.write("lying", model_data(sizes={"square": [1328, 1328]}, orientation="portrait"))
         self.assertIn("does not define", self.error_of("lying"))
+
+    def test_a_steps_range_is_read_and_published(self):
+        self.write("stepped", model_data(steps={"min": 4, "max": 50},
+                                         variants=[{"refs": 0, "workflow": sampler_graph(25)}]))
+        spec = workflows.model("stepped")
+        self.assertEqual(spec.steps_range, (4, 50))
+        self.assertEqual(spec.describe()["steps"], {"min": 4, "max": 50})
+        self.assertEqual(workflows.steps_default(spec), 25, "the graph's own number is the default")
+
+    def test_a_fixed_step_count_is_min_equal_max(self):
+        self.write("distilled", model_data(steps={"min": 4, "max": 4},
+                                           variants=[{"refs": 0, "workflow": sampler_graph(4)}]))
+        spec = workflows.model("distilled")
+        self.assertEqual(spec.steps_range, (4, 4))
+        self.assertEqual(workflows.steps_default(spec), 4)
+
+    def test_a_model_without_steps_offers_no_choice(self):
+        self.write("plain", model_data())
+        self.assertIsNone(workflows.model("plain").steps_range)
+        self.assertNotIn("steps", workflows.model("plain").describe())
+
+    def test_a_malformed_steps_object_is_an_error(self):
+        for broken in ({"min": 4}, {"min": 4, "max": 50, "default": 25},
+                       {"min": 0, "max": 50}, {"min": 50, "max": 4}, {"min": "4", "max": "50"}, [4, 50]):
+            with self.subTest(broken=broken):
+                self.write("broken-steps", model_data(steps=broken))
+                self.assertIn("'steps' must be", self.error_of("broken-steps"))
+
+    def test_steps_default_is_none_when_the_variants_disagree(self):
+        self.write("mixed", model_data(
+            steps={"min": 4, "max": 50},
+            variants=[{"refs": 0, "workflow": sampler_graph(25)},
+                      {"refs": 1, "workflow": sampler_graph(8)}],
+        ))
+        self.assertIsNone(workflows.steps_default(workflows.model("mixed")))
 
     def test_model_codes_are_sorted(self):
         self.write("b-model", model_data())

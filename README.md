@@ -21,7 +21,7 @@ curl -s -F model=qwen-image-2.1 \
 
 ```json
 {"job_id": "6edaa0fb-0653-4e6b-92e9-851b8666fd62", "status": "queued", "orientation": "square",
- "width": 1328, "height": 1328, "model_file": "qwen_image_2.1_int8_convrot.safetensors",
+ "width": 1328, "height": 1328, "steps": 25, "model_file": "qwen_image_2.1_int8_convrot.safetensors",
  "loras": [{"name": "my-style.safetensors", "strength": 0.6, "node": "9"}],
  "placements": [{"node": "1", "class": "UNETLoaderMultiGPU", "device": "cuda:2", "mb": 6921},
                 {"node": "2", "class": "CLIPLoaderMultiGPU", "device": "cuda:3", "mb": 10966}]}
@@ -66,7 +66,7 @@ Python 3.10 or newer. No dependencies beyond what ComfyUI itself uses.
 A working install says this in the log:
 
 ```
-[comfyui-sillytalk] v1.2.1 — POST /sillytalk/generate, GET /sillytalk/models
+[comfyui-sillytalk] v1.3.0 — POST /sillytalk/generate, GET /sillytalk/models
 ```
 
 and answers `GET /sillytalk/health`.
@@ -106,6 +106,7 @@ could be pointed at:
   "max_refs": 2,
   "orientation": "square",
   "sizes": {"square": [1328, 1328], "portrait": [1136, 1472], "landscape": [1472, 1136]},
+  "steps": {"min": 4, "max": 50, "default": 25},
   "model_file": "qwen_image_2.1_int8_convrot.safetensors",
   "model_files": {"folder": "diffusion_models",
                   "options": [{"name": "qwen_image_2.1_int8_convrot.safetensors", "mb": 6919},
@@ -119,8 +120,10 @@ could be pointed at:
 ```
 
 `model_files` is only there when the workflow has a swappable file, and
+`steps` only when the model lets a request choose the step count: `default` is the
+number its graph wires, `min`/`max` what a request may ask for instead.
 `loras.max` is the number of slots its graph wired — `0` for a workflow that takes
-no LoRAs. Both option lists are read from the server's folders (subfolders
+no LoRAs. The two option lists are read from the server's folders (subfolders
 included, under their relative names), so a file the user drops in becomes a
 choice in the client without either side being reconfigured. The listing is cached
 for 15 seconds, which is long enough for a settings dialog to open quickly and
@@ -146,6 +149,7 @@ a pair whose headers could not be read, which is not a verdict; a LoRA with no
 | `model_file` | no | a file of `models/diffusion_models/` to load instead of the one the workflow names — how a derivative someone dropped there gets used |
 | `loras` | no | a JSON array of `{"name": …, "strength": …}` (strength optional, default `1.0`), named in the order they merge. Bare strings are accepted too. At most 8 |
 | `seed` | no | a new one per job when omitted |
+| `steps` | no | a whole number inside the range the model declares (`/sillytalk/models` → `steps.min`/`steps.max`). Omitted, the number the workflow wires is used. A model distilled for a fixed count accepts only that count; a model whose catalogue has no `steps` refuses the field |
 
 `model_file` and `loras` are checked against the server's own folders before the
 job is queued, so a name that is not there is answered with the list that is:
@@ -308,6 +312,7 @@ its extension is the model code** a client sends.
   },
   "orientation": "square",
   "model_file": "qwen_image_2.1_int8_convrot.safetensors",
+  "steps": { "min": 4, "max": 50 },
   "variants": [
     { "refs": 0, "workflow": { … } },
     { "refs": 1, "workflow": { … } },
@@ -328,6 +333,14 @@ shape used when a request names none (default `square`); a model that lists only
 file swappable: `/sillytalk/models` then publishes the whole folder, and a client
 can ask for another one of it. A workflow without it — one whose LoRA is welded
 in, say — keeps its own file and says so by not offering a choice.
+
+`steps` is optional and is the one sampler setting a client may move. It declares
+the range, not the number: the step count wired into the graph is what a request
+that names none runs with, and `/sillytalk/models` reports it as `steps.default`.
+A model distilled down to four steps declares `{ "min": 4, "max": 4 }`, so asking
+for twenty-five is a `400` instead of the smear that a step LoRA produces away
+from its count. A workflow without `steps` accepts no such field at all — its
+graph owns the sampler, as it owns the shape and the devices.
 
 A `workflow` is either the API format (what *Save (API)* produces) or the UI
 format (what *Save* produces). UI graphs are converted once, on first use, with
@@ -482,6 +495,9 @@ skipped layers are part of the style.
 2. Put `PARAM_MODEL_FILE` in the UNET loader and add the LoRA chain described
    under [LoRA slots](#lora-slots) if the model should take them. Both are
    optional — leave them out and the workflow keeps its own file and no LoRAs.
+   Add `steps` if a client should be able to choose the step count; the number
+   left on the `KSampler` is the default, and a distilled graph should declare
+   `min` equal to `max`.
 3. Save it as `workflows/<your-model-code>.json` in the format above, with its
    `sizes` filled in from what the model was trained at.
 4. Restart ComfyUI, or touch the file to drop the conversion cache, and check
@@ -519,6 +535,13 @@ kept unmodified so a future sync stays a copy and paste.
 Everything else in this repository is MIT — see [`LICENSE`](LICENSE).
 
 ## Version history
+
+**1.3.0** — A client may choose the step count: `steps` in the request, a
+`min`/`max` range per model in the catalogue, and the number the graph wires stays
+the default (and is reported as `steps.default`). A distilled model declares
+`min == max`, so the four-step LoRA cannot be asked to run twenty-five; a model
+whose catalogue has no range refuses the field outright, and a graph whose own
+step count sits outside its declared range is refused before the queue.
 
 **1.2.1** — A `yes` that is only part of a LoRA says which layers it loses, and
 `scripts/lora_both_mlp.py` writes a LoRA carrying both spellings of the

@@ -94,7 +94,9 @@ cases written down.
 
 **The catalogue file stem is the API.** `workflows/<code>.json` defines the model
 code, `sizes` is required and holds the pixels the model actually draws (ComfyUI
-rounds to a multiple of 16 — verify against a real run), and `variants` holds one
+rounds to a multiple of 16 — verify against a real run), `steps` is optional and
+declares the `min`/`max` a request may ask for (the number wired into the graph
+stays the default; a distilled model says `min == max`), and `variants` holds one
 graph per reference count. A file that fails to parse only removes itself from
 `/sillytalk/models` and shows up in `/sillytalk/health` under `broken_workflows`.
 Graphs may be UI format (converted in-process, cached by file mtime) or API format.

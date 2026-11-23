@@ -16,6 +16,10 @@
  },
  "orientation": "square",
  "model_file": "qwen_image_2512_fp8_e4m3fn.safetensors",
+ "steps": {
+  "min": 4,
+  "max": 4
+ },
  "variants": [
   {
    "refs": 0,

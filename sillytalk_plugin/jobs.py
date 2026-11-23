@@ -64,6 +64,9 @@ class Job:
     width: int
     height: int
     seed: int
+    # The step count the sampler actually ran with, filled in once the graph is
+    # built: the client's choice, or the number the workflow file wires.
+    steps: int | None = None
     status: str = QUEUED
     # What the client asked for, kept so the job can be read back as the request
     # that made it: the orientation it sent and the size that came out of it,
@@ -96,6 +99,8 @@ class Job:
         }
         if self.error:
             out["error"] = self.error
+        if self.steps is not None:
+            out["steps"] = self.steps
         if self.orientation:
             out["orientation"] = self.orientation
         if self.model_file:
@@ -178,6 +183,7 @@ async def start(
     model_file: str | None = None,
     loras: list[dict[str, Any]] | None = None,
     seed: int | None = None,
+    steps: int | None = None,
 ) -> Job:
     """Builds the run's graph and puts it on the server's queue.
 
@@ -211,6 +217,7 @@ async def start(
         seed=seed if seed is not None else uuid.uuid4().int % 2147483647,
         orientation=orientation or spec.default_orientation,
         model_file=file_name,
+        steps=steps,
         refs=list(ref_paths),
     )
     _jobs[job.id] = job
@@ -229,12 +236,13 @@ async def start(
         raise JobError(str(err)) from err
 
     logger.info(
-        "sillytalk job %s queued (model=%s, %s %dx%d, file=%s%s, %s)",
+        "sillytalk job %s queued (model=%s, %s %dx%d, %s steps, file=%s%s, %s)",
         job.id,
         spec.code,
         job.orientation,
         width,
         height,
+        job.steps,
         file_name,
         f", loras={'+'.join(run.names)}" if run.names else "",
         job.placement.summary(),
@@ -361,6 +369,7 @@ def _build_graph(
             values[f"PARAM_STRING_INPUT_IMAGE_FILENAME_{index}"] = path.name
 
     graph = substitute(graph, values)
+    job.steps = _apply_steps(graph, spec, job.steps)
     leftovers = find_placeholders(graph)
     if leftovers:
         raise JobError(
@@ -371,6 +380,61 @@ def _build_graph(
             f"PARAM_STRING_INPUT_IMAGE_FILENAME(_1/_2)"
         )
     return graph, run
+
+
+def _apply_steps(graph: dict[str, Any], spec: ModelSpec, requested: int | None) -> int | None:
+    """Writes the run's step count into every sampler input, or reads the graph's own.
+
+    A sampler is whatever node carries an integer `steps` input, so a graph with
+    more than one is written on all of them — chained samplers would otherwise
+    disagree about the run. The catalogue's `min`/`max` is what keeps a client
+    from turning a distilled four-step graph into a twenty-five-step smear, and
+    from burning an hour on a hundred steps.
+    """
+    inputs_list: list[dict[str, Any]] = []
+    for node in graph.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        value = inputs.get("steps")
+        if isinstance(value, int) and not isinstance(value, bool):
+            inputs_list.append(inputs)
+
+    if requested is not None:
+        if spec.steps_range is None:
+            raise JobError(
+                f"the '{spec.code}' workflow does not offer a choice of steps — its graph wires the "
+                f"number it draws with"
+            )
+        low, high = spec.steps_range
+        if not low <= requested <= high:
+            raise JobError(
+                f"the '{spec.code}' workflow draws with {_steps_text(low, high)}; {requested} was asked for"
+            )
+        if not inputs_list:
+            raise JobError(f"the '{spec.code}' workflow has no sampler 'steps' input to write")
+        for inputs in inputs_list:
+            inputs["steps"] = requested
+        return requested
+
+    values = sorted({inputs["steps"] for inputs in inputs_list})
+    if spec.steps_range is not None and values:
+        low, high = spec.steps_range
+        outside = [value for value in values if not low <= value <= high]
+        if outside:
+            # The workflow file disagrees with its own catalogue entry: either
+            # the graph was re-saved with another number or the range is stale.
+            raise JobError(
+                f"the '{spec.code}' workflow wires {outside[0]} steps into its sampler, outside the "
+                f"{_steps_text(low, high)} its catalogue declares"
+            )
+    return values[0] if len(values) == 1 else None
+
+
+def _steps_text(low: int, high: int) -> str:
+    return f"exactly {low} steps" if low == high else f"{low} to {high} steps"
 
 
 def _readable_entries():

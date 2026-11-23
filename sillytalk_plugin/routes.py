@@ -29,12 +29,12 @@ from aiohttp import web
 from . import jobs, lora_fit, model_files, placement
 from . import loras as loras_module
 from .jobs import CANCELLED, FAILED, RUNNING
-from .workflows import WORKFLOW_DIR, entries
+from .workflows import WORKFLOW_DIR, entries, steps_default
 from .workflows import models as catalogue_models
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 MAX_PROMPT_CHARS = 8000
 MAX_REF_FILES = 8
@@ -44,7 +44,7 @@ MAX_TOTAL_BYTES = 96 * 1024 * 1024
 MAX_LORAS = 8
 ALLOWED_REF_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
                         ".bmp": "image/bmp"}
-TEXT_FIELDS = ("model", "prompt", "orientation", "model_file", "loras", "seed")
+TEXT_FIELDS = ("model", "prompt", "orientation", "model_file", "loras", "seed", "steps")
 
 
 def _json(data: Any, status: int = 200) -> web.Response:
@@ -81,7 +81,7 @@ async def index(request: web.Request) -> web.Response:
             "endpoints": [
                 "GET /sillytalk/health",
                 "GET /sillytalk/models",
-                "POST /sillytalk/generate (multipart: model, prompt, orientation, model_file, loras, seed, image)",
+                "POST /sillytalk/generate (multipart: model, prompt, orientation, model_file, loras, seed, steps, image)",
                 "GET /sillytalk/jobs/{job_id}",
                 "GET /sillytalk/jobs/{job_id}/image",
                 "DELETE /sillytalk/jobs/{job_id}",
@@ -140,6 +140,12 @@ async def list_models(request: web.Request) -> web.Response:
         files = diffusion if spec.model_file else []
         if files:
             entry["model_files"] = {"folder": model_files.DIFFUSION_FOLDER, "options": files}
+        if "steps" in entry:
+            # The graph's own number is the default a client starts its slider
+            # on, so it comes from the graph rather than from a catalogue field.
+            default = steps_default(spec)
+            if default is not None:
+                entry["steps"]["default"] = default
         slots = loras_module.available_slots(spec)
         # A workflow with no slots takes no LoRAs at all, so there is nothing to
         # judge and no reason to pay for the verdicts in every probe's answer.
@@ -219,6 +225,9 @@ async def generate(request: web.Request) -> web.Response:
         chosen, problem = _loras(fields.get("loras"))
         if problem:
             return _json({"error": problem}, 400)
+        wanted_steps, problem = _steps(fields.get("steps"))
+        if problem:
+            return _json({"error": problem}, 400)
 
         job = await jobs.start(
             model_code,
@@ -228,6 +237,7 @@ async def generate(request: web.Request) -> web.Response:
             model_file=(fields.get("model_file") or "").strip() or None,
             loras=chosen,
             seed=_seed(fields.get("seed")),
+            steps=wanted_steps,
         )
         started = True
         return _json(job.describe(), 202)
@@ -306,6 +316,21 @@ def _loras(raw: str | None) -> tuple[list[dict[str, Any]] | None, str]:
             continue
         return None, "every entry of 'loras' needs a name"
     return out, ""
+
+
+def _steps(value: str | None) -> tuple[int | None, str]:
+    """The `steps` field: the run's step count, or nothing when it was not sent.
+
+    Whether the model offers a choice at all, and what range, is the catalogue's
+    answer — so the parsing here only insists on a whole number.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None, ""
+    try:
+        return int(text), ""
+    except ValueError:
+        return None, f"the 'steps' field must be a whole number, not {text!r}"
 
 
 def _seed(value: str | None) -> int | None:

@@ -12,6 +12,7 @@ the model code a client sends. The format:
       },
       "orientation": "square",                 // used when the client says none
       "model_file": "qwen_image_2512_fp8.safetensors",  // PARAM_MODEL_FILE's default
+      "steps": {"min": 4, "max": 50},           // optional: the range a client may ask for
       "variants": [
         { "refs": 0, "workflow": { ...ComfyUI UI-format graph... } },
         { "refs": 1, "workflow": { ... } },
@@ -20,7 +21,12 @@ the model code a client sends. The format:
     }
 
 `sizes` is what a picture of this model is drawn at; the client sends
-`orientation` and gets the pair back in the job. `model_file` is the file the
+`orientation` and gets the pair back in the job. `steps` declares whether the
+client may choose a step count at all: the number wired into the graph is the
+default, and a model distilled for a fixed few steps says so with `min == max`
+(for example `{"min": 4, "max": 4}`). A file without it takes no `steps` field.
+
+`model_file` is the file the
 workflow's `PARAM_MODEL_FILE` loader uses when the client does not name one —
 the client may name any file of that folder, which is how a derivative of the
 model gets used without touching a workflow file.
@@ -77,6 +83,10 @@ class ModelSpec:
     # The file PARAM_MODEL_FILE falls back to, or None when the graph has no
     # such placeholder and therefore offers no choice of model file.
     model_file: str | None = None
+    # The step counts a request may ask for, or None when the graph owns the
+    # sampler settings outright. The number wired into the graph is the default,
+    # so a file distilled for four steps declares min == max == 4.
+    steps_range: tuple[int, int] | None = None
     # refs -> the UI-format graph of that reference count, ascending.
     graphs: tuple[tuple[int, dict[str, Any]], ...] = ()
 
@@ -109,7 +119,7 @@ class ModelSpec:
         )
 
     def describe(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "code": self.code,
             "label": self.label,
             "max_refs": self.max_refs,
@@ -118,6 +128,10 @@ class ModelSpec:
             "sizes": {name: [width, height] for name, (width, height) in self.sizes},
             "model_file": self.model_file,
         }
+        if self.steps_range:
+            low, high = self.steps_range
+            out["steps"] = {"min": low, "max": high}
+        return out
 
 
 @dataclass
@@ -135,6 +149,7 @@ class CatalogueEntry:
     sizes: dict[str, tuple[int, int]] = field(default_factory=dict)
     orientation: str = "square"
     model_file: str | None = None
+    steps_range: tuple[int, int] | None = None
     error: str | None = None
 
 
@@ -181,6 +196,13 @@ def _read_file(path: Path) -> CatalogueEntry:
         entry.error = "'model_file' must be a file name or absent"
         return entry
     entry.model_file = str(model_file).strip() if model_file else None
+    steps = raw.get("steps")
+    if steps is not None:
+        parsed_steps = _steps_range(steps)
+        if parsed_steps is None:
+            entry.error = "'steps' must be an object of exactly 'min' and 'max' whole numbers, min <= max"
+            return entry
+        entry.steps_range = parsed_steps
 
     variants = raw.get("variants")
     if not isinstance(variants, list) or not variants:
@@ -213,6 +235,24 @@ def _read_file(path: Path) -> CatalogueEntry:
 
     entry.refs = sorted(seen)
     return entry
+
+
+def _steps_range(value: Any) -> tuple[int, int] | None:
+    """`{"min": 4, "max": 50}` as a pair of positive step counts.
+
+    Exactly these two keys: a `default` would be a second source of the number
+    the graph already wires, and a `fixed` flag says nothing that `min == max`
+    does not.
+    """
+    if not isinstance(value, dict) or set(value) != {"min", "max"}:
+        return None
+    out: list[int] = []
+    for name in ("min", "max"):
+        item = value[name]
+        if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+            return None
+        out.append(item)
+    return (out[0], out[1]) if out[0] <= out[1] else None
 
 
 def _pixel_pair(value: Any) -> tuple[int, int] | None:
@@ -275,6 +315,7 @@ def _spec(entry: CatalogueEntry) -> ModelSpec:
         sizes=tuple(entry.sizes.items()),
         default_orientation=entry.orientation,
         model_file=entry.model_file,
+        steps_range=entry.steps_range,
         graphs=tuple(sorted(graphs.items())),
     )
 
@@ -332,6 +373,28 @@ def _convert_all(spec: ModelSpec) -> dict[int, dict[str, Any]]:
         out[refs] = api
     logger.info("sillytalk: converted the '%s' workflow (%s)", spec.code, ", ".join(str(r) for r in sorted(out)))
     return out
+
+
+def steps_default(spec: ModelSpec) -> int | None:
+    """The step count the graph wires, when every variant agrees on one.
+
+    Read out of the converted graph rather than declared in the catalogue: the
+    number a UI user sees on the KSampler is the number a client gets when it
+    sends no `steps`, so a graph edited in ComfyUI keeps that answer true.
+    """
+    found: set[int] = set()
+    for refs, _graph in spec.graphs:
+        try:
+            graph = api_graph(spec, refs)
+        except WorkflowError:
+            continue
+        for node in graph.values():
+            if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
+                continue
+            value = node["inputs"].get("steps")
+            if isinstance(value, int) and not isinstance(value, bool):
+                found.add(value)
+    return found.pop() if len(found) == 1 else None
 
 
 def forget_cache() -> None:
