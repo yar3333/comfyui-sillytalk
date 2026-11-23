@@ -66,7 +66,7 @@ Python 3.10 or newer. No dependencies beyond what ComfyUI itself uses.
 A working install says this in the log:
 
 ```
-[comfyui-sillytalk] v1.1.0 — POST /sillytalk/generate, GET /sillytalk/models
+[comfyui-sillytalk] v1.2.1 — POST /sillytalk/generate, GET /sillytalk/models
 ```
 
 and answers `GET /sillytalk/health`.
