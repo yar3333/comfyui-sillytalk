@@ -355,7 +355,6 @@ value — `"PARAM_PROMPT"`, not `"a prefix PARAM_PROMPT"`.
 | `PARAM_STRING_OUTPUT_IMAGE_FILENAME` | string | `sillytalk/<job>` — for `SaveImage`'s `filename_prefix` |
 | `PARAM_STRING_INPUT_IMAGE_FILENAME` | string | the reference, for a 1-reference variant |
 | `PARAM_STRING_INPUT_IMAGE_FILENAME_1` … `_8` | string | the references, for a variant with several |
-| `PARAM_DEVICE` | — | accepted and ignored: every `device` input is written by the placement code |
 
 Reference values are flat file names in `input/`, because that is what a
 `LoadImage` node lists in a current ComfyUI. A placeholder the plugin does not

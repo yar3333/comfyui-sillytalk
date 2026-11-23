@@ -9,9 +9,8 @@ the UI-format graph of each reference count under the keys `text`, `oneImage` an
 entry says how many references it takes — so a fourth reference is a new entry
 rather than a new key name somebody has to guess.
 
-A `device` widget of a model loader is rewritten to the first card: this plugin
-overwrites every device value at run time, and leaving `PARAM_DEVICE` in the file
-would only suggest that the client still has a say in it.
+Device widgets are left exactly as the source has them: the plugin writes every
+`device` input at run time, so the value in the file is never consulted.
 
 Run it again after editing a graph in the ComfyUI UI and saving it back over the
 sillytalk file, or edit the catalogue file directly and keep the same shape.
@@ -31,40 +30,13 @@ LABELS = {
     "qwen-image-2512": "Qwen-Image 2512 (references through Qwen-Image-Edit 2511)",
 }
 DEFAULT_SIZE = {"qwen-image-2.1": 1328, "qwen-image-2512": 1328}
-FALLBACK_DEVICE = "cuda:0"
-
-
-def strip_devices(node: Any) -> int:
-    """Pins every device widget to a concrete card; returns how many.
-
-    In the UI format a widget is a position in `widgets_values`, not a key, so
-    the placeholder is matched by value — and in the API format it would be
-    `inputs.device`, which the same rule catches.
-    """
-    changed = 0
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if isinstance(value, str) and value == "PARAM_DEVICE":
-                node[key] = FALLBACK_DEVICE
-                changed += 1
-            else:
-                changed += strip_devices(value)
-    elif isinstance(node, list):
-        for index, item in enumerate(node):
-            if isinstance(item, str) and item == "PARAM_DEVICE":
-                node[index] = FALLBACK_DEVICE
-                changed += 1
-            else:
-                changed += strip_devices(item)
-    return changed
 
 
 def convert(source: Path) -> dict[str, Any]:
     raw = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"{source}: expected an object of workflow variants")
-    if "variants" in raw:  # already this format: normalise the devices and keep it
-        strip_devices(raw)
+    if "variants" in raw:  # already this format
         return raw
 
     variants = []
@@ -72,7 +44,6 @@ def convert(source: Path) -> dict[str, Any]:
         graph = raw.get(key)
         if not isinstance(graph, dict) or not graph:
             continue
-        strip_devices(graph)
         variants.append({"refs": refs, "workflow": graph})
     if not variants:
         raise ValueError(f"{source}: holds none of {', '.join(key for key, _ in VARIANT_KEYS)}")

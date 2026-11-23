@@ -313,7 +313,7 @@ def placeable_nodes(graph: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         offers = _class_offers_device(class_type)
         if offers is False:
             continue
-        if offers is None and not (_looks_like_device(inputs["device"]) or inputs["device"] == "PARAM_DEVICE"):
+        if offers is None and not _looks_like_device(inputs["device"]):
             continue
         found.append((str(node_id), node))
     return found

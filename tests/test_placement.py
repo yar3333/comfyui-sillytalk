@@ -226,10 +226,6 @@ class PlaceableNodeTest(unittest.TestCase):
         found = [node_id for node_id, _ in placement.placeable_nodes(graph)]
         self.assertEqual(found, ["1"])
 
-    def test_a_placeholder_device_counts_as_placeable(self):
-        graph = graph_of(**{"1": {"class_type": "X", "inputs": {"device": "PARAM_DEVICE"}}})
-        self.assertEqual([node_id for node_id, _ in placement.placeable_nodes(graph)], ["1"])
-
 
 if __name__ == "__main__":
     unittest.main()

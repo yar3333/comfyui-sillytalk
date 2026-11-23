@@ -5,8 +5,8 @@ gets the run's value. A value that merely contains one stays untouched, so a
 prompt template in a workflow cannot be half-replaced by accident.
 
 The device of a model loader is deliberately NOT a placeholder: this plugin
-decides it per run (see `placement.py`), and a `PARAM_DEVICE` left in an older
-workflow file is simply overwritten along with every other device value.
+decides it per run (see `placement.py`) and writes every `device` input, so a
+device value a workflow file holds is ignored rather than substituted.
 """
 
 from __future__ import annotations

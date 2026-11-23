@@ -362,9 +362,6 @@ def _build_graph(
 
     graph = substitute(graph, values)
     leftovers = find_placeholders(graph)
-    # PARAM_DEVICE is the one placeholder this plugin answers by itself, and an
-    # older workflow file still holds it in every loader.
-    leftovers.discard("PARAM_DEVICE")
     if leftovers:
         raise JobError(
             f"the '{spec.code}' workflow asks for {', '.join(sorted(leftovers))}, which this plugin does not "

@@ -92,11 +92,6 @@ class BuildGraphTest(unittest.TestCase):
             self.build(graph, [])
         self.assertIn("PARAM_MOONLIGHT", str(caught.exception))
 
-    def test_a_leftover_device_placeholder_is_tolerated(self):
-        graph = {"1": {"class_type": "UNETLoaderMultiGPU", "inputs": {"device": "PARAM_DEVICE"}}}
-        out = self.build(graph, [])
-        self.assertEqual(out["1"]["inputs"]["device"], "PARAM_DEVICE", "placement overwrites it next")
-
     def test_the_chosen_model_file_lands_in_the_loader(self):
         graph = {"1": {"class_type": "UNETLoaderMultiGPU", "inputs": {"unet_name": "PARAM_MODEL_FILE"}}}
         out = self.build(graph, [], model_file="my_derivative.safetensors")
