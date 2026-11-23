@@ -21,7 +21,7 @@ curl -s -F model=qwen-image-2.1 \
 
 ```json
 {"job_id": "6edaa0fb-0653-4e6b-92e9-851b8666fd62", "status": "queued", "orientation": "square",
- "width": 1328, "height": 1328, "steps": 25, "model_file": "qwen_image_2.1_int8_convrot.safetensors",
+ "width": 880, "height": 880, "steps": 25, "model_file": "qwen_image_2.1_int8_convrot.safetensors",
  "loras": [{"name": "my-style.safetensors", "strength": 0.6, "node": "9"}],
  "placements": [{"node": "1", "class": "UNETLoaderMultiGPU", "device": "cuda:2", "mb": 6921},
                 {"node": "2", "class": "CLIPLoaderMultiGPU", "device": "cuda:3", "mb": 10966}]}
@@ -66,7 +66,7 @@ Python 3.10 or newer. No dependencies beyond what ComfyUI itself uses.
 A working install says this in the log:
 
 ```
-[comfyui-sillytalk] v1.3.0 — POST /sillytalk/generate, GET /sillytalk/models
+[comfyui-sillytalk] v1.3.1 — POST /sillytalk/generate, GET /sillytalk/models
 ```
 
 and answers `GET /sillytalk/health`.
@@ -105,7 +105,7 @@ could be pointed at:
   "label": "Qwen-Image 2.1 (references through the same model)",
   "max_refs": 2,
   "orientation": "square",
-  "sizes": {"square": [1328, 1328], "portrait": [1136, 1472], "landscape": [1472, 1136]},
+  "sizes": {"square": [880, 880], "portrait": [752, 976], "landscape": [976, 752]},
   "steps": {"min": 4, "max": 50, "default": 25},
   "model_file": "qwen_image_2.1_int8_convrot.safetensors",
   "model_files": {"folder": "diffusion_models",
@@ -306,9 +306,9 @@ its extension is the model code** a client sends.
 {
   "label": "Qwen-Image 2.1 (references through the same model)",
   "sizes": {
-    "square": [1328, 1328],
-    "portrait": [1136, 1472],
-    "landscape": [1472, 1136]
+    "square": [880, 880],
+    "portrait": [752, 976],
+    "landscape": [976, 752]
   },
   "orientation": "square",
   "model_file": "qwen_image_2.1_int8_convrot.safetensors",
@@ -535,6 +535,12 @@ kept unmodified so a future sync stays a copy and paste.
 Everything else in this repository is MIT — see [`LICENSE`](LICENSE).
 
 ## Version history
+
+**1.3.1** — The shapes both catalogues draw are 1.5× smaller: 880×880 square,
+752×976 portrait and 976×752 landscape instead of 1328×1328, 1136×1472 and
+1472×1136. The ratios are unchanged and every number stays a multiple of 16, so
+ComfyUI draws exactly what the catalogue promises — a real 4-step run came back
+752×976 — and one picture costs 2.28× fewer pixels.
 
 **1.3.0** — A client may choose the step count: `steps` in the request, a
 `min`/`max` range per model in the catalogue, and the number the graph wires stays

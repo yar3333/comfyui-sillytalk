@@ -2,16 +2,16 @@
  "label": "Qwen-Image 2512 (references through Qwen-Image-Edit 2511)",
  "sizes": {
   "square": [
-   1328,
-   1328
+   880,
+   880
   ],
   "portrait": [
-   1136,
-   1472
+   752,
+   976
   ],
   "landscape": [
-   1472,
-   1136
+   976,
+   752
   ]
  },
  "orientation": "square",
