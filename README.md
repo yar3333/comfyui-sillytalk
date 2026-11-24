@@ -66,7 +66,7 @@ Python 3.10 or newer. No dependencies beyond what ComfyUI itself uses.
 A working install says this in the log:
 
 ```
-[comfyui-sillytalk] v1.3.1 — POST /sillytalk/generate, GET /sillytalk/models
+[comfyui-sillytalk] v1.4.0 — POST /sillytalk/generate, GET /sillytalk/models
 ```
 
 and answers `GET /sillytalk/health`.
@@ -103,7 +103,8 @@ could be pointed at:
 {"models": [{
   "code": "qwen-image-2.1",
   "label": "Qwen-Image 2.1 (references through the same model)",
-  "max_refs": 2,
+  "max_refs": 10,
+  "refs": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   "orientation": "square",
   "sizes": {"square": [880, 880], "portrait": [752, 976], "landscape": [976, 752]},
   "steps": {"min": 4, "max": 50, "default": 25},
@@ -115,7 +116,7 @@ could be pointed at:
             "options": [{"name": "my-style.safetensors", "mb": 224,
                          "fits": {"qwen_image_2.1_int8_convrot.safetensors": {"fits": "no"},
                                   "my-qwen-derivative.safetensors": {"fits": "yes"},
-                                  "qwen_image_2512_fp8_e4m3fn.safetensors": {"fits": "yes"}}}]}
+                                  "qwen_image_2.1_fp8_e4m3fn.safetensors": {"fits": "yes"}}}]}
 }]}
 ```
 
@@ -155,7 +156,7 @@ a pair whose headers could not be read, which is not a verdict; a LoRA with no
 job is queued, so a name that is not there is answered with the list that is:
 
 ```json
-{"error": "this server has no 'my-qwen.safetensors' in models/diffusion_models/ — it has: qwen_image_2.1_int8_convrot.safetensors, qwen_image_2512_fp8_e4m3fn.safetensors. Drop the file there and ask again."}
+{"error": "this server has no 'my-qwen.safetensors' in models/diffusion_models/ — it has: qwen_image_2.1_int8_convrot.safetensors, qwen_image_2.1_fp8_e4m3fn.safetensors. Drop the file there and ask again."}
 ```
 
 A LoRA the file being loaded cannot take is refused the same way, because the
@@ -166,12 +167,12 @@ makes without it:
 {"error": "a LoRA of this run does not fit 'qwen_image_2.1_int8_convrot.safetensors': 'Qwen-Image-Lightning-4steps-V1.0.safetensors' — 128 of the layers it names are at a size this model does not have, so ComfyUI would load it and skip them — the picture would be close to the one you get without it. What models/loras/ has that it either fits or cannot judge: nothing."}
 ```
 
-Limits: 8 reference pictures, 32 MB each, 96 MB per request. A file whose name
+Limits: 10 reference pictures, 32 MB each, 96 MB per request. A file whose name
 carries no supported extension is refused — a reference has to be a picture, and
 saving something else under `.png` only moves the failure into the run.
 
 ```bash
-curl -s -F model=qwen-image-2512 \
+curl -s -F model=qwen-image-2.1 \
         -F "prompt=turn these two objects into one calm still life" \
         -F image=@ref1.png -F image=@ref2.png \
         -F orientation=portrait \
@@ -315,8 +316,7 @@ its extension is the model code** a client sends.
   "steps": { "min": 4, "max": 50 },
   "variants": [
     { "refs": 0, "workflow": { … } },
-    { "refs": 1, "workflow": { … } },
-    { "refs": 2, "workflow": { … } }
+    { "refs": { "min": 1, "max": 10 }, "workflow": { …10 LoadImage slots… } }
   ]
 }
 ```
@@ -342,6 +342,22 @@ for twenty-five is a `400` instead of the smear that a step LoRA produces away
 from its count. A workflow without `steps` accepts no such field at all — its
 graph owns the sampler, as it owns the shape and the devices.
 
+`refs` says how many reference pictures a graph serves. A number means exactly
+that many: the graph was drawn for that count, and a request with another count
+is refused. `{ "min": 1, "max": 10 }` means the graph was drawn once with ten
+reference slots, and at submit time the plugin keeps the first *k* loaders —
+`k` being what the request sent — and takes the rest out of the graph. That is
+what keeps one model to one graph instead of ten near-identical copies; the
+slots a workflow gets are checked when the catalogue is read, so a file that
+promises ten references and wires two is a `broken_workflows` entry rather than a
+run that silently draws from two pictures.
+
+Trimming only works when a reference is one loader: a graph that is its own
+chain per reference — `LoadImage` → `ImageScaleToTotalPixels` → `VAEEncode` →
+`ReferenceLatent`, as Qwen-Image-Edit style graphs draw it — must declare one
+variant per count, since taking the loader out would leave the next node of its
+chain without an input.
+
 A `workflow` is either the API format (what *Save (API)* produces) or the UI
 format (what *Save* produces). UI graphs are converted once, on first use, with
 the vendored converter, and the result is cached until the file's modification
@@ -366,11 +382,12 @@ value — `"PARAM_PROMPT"`, not `"a prefix PARAM_PROMPT"`.
 | `PARAM_INT_OUTPUT_IMAGE_WIDTH` | int | the width the requested shape means for this model |
 | `PARAM_INT_OUTPUT_IMAGE_HEIGHT` | int | the height the requested shape means for this model |
 | `PARAM_STRING_OUTPUT_IMAGE_FILENAME` | string | `sillytalk/<job>` — for `SaveImage`'s `filename_prefix` |
-| `PARAM_STRING_INPUT_IMAGE_FILENAME` | string | the reference, for a 1-reference variant |
-| `PARAM_STRING_INPUT_IMAGE_FILENAME_1` … `_8` | string | the references, for a variant with several |
+| `PARAM_STRING_INPUT_IMAGE_FILENAME_1` … `_10` | string | the references, in the order they were sent |
 
 Reference values are flat file names in `input/`, because that is what a
-`LoadImage` node lists in a current ComfyUI. A placeholder the plugin does not
+`LoadImage` node lists in a current ComfyUI. They are numbered from one even for
+a single picture, and a graph wired for more slots than the request fills keeps
+the first ones. A placeholder the plugin does not
 know is a `400` that lists what it does — a typo fails loudly at submit time
 rather than drawing a picture of the string `PARAM_PROMPT`.
 
@@ -487,11 +504,14 @@ skipped layers are part of the style.
 
 ### Adding a model
 
-1. Build the workflow in the UI and save it. Make one variant per number of
-   references the model can take, each with `LoadImage` nodes holding
-   `PARAM_STRING_INPUT_IMAGE_FILENAME…`, a text encoder holding `PARAM_PROMPT`,
-   a `KSampler` holding `PARAM_SEED`, and a `SaveImage` whose `filename_prefix`
-   is `PARAM_STRING_OUTPUT_IMAGE_FILENAME`.
+1. Build the workflow in the UI and save it. If the model takes references, wire
+   one `LoadImage` per picture the model can use, each holding
+   `PARAM_STRING_INPUT_IMAGE_FILENAME_1…N`, and declare the count as a range —
+   the plugin fills only the pictures a request actually sends. A reference that
+   needs a chain of nodes of its own gets a variant per count instead. The graph
+   also holds a text encoder with `PARAM_PROMPT`, a `KSampler` with
+   `PARAM_SEED`, and a `SaveImage` whose `filename_prefix` is
+   `PARAM_STRING_OUTPUT_IMAGE_FILENAME`.
 2. Put `PARAM_MODEL_FILE` in the UNET loader and add the LoRA chain described
    under [LoRA slots](#lora-slots) if the model should take them. Both are
    optional — leave them out and the workflow keeps its own file and no LoRAs.
@@ -535,6 +555,22 @@ kept unmodified so a future sync stays a copy and paste.
 Everything else in this repository is MIT — see [`LICENSE`](LICENSE).
 
 ## Version history
+
+**1.4.0** — One graph serves every reference count: the 2.1 workflow is wired
+once with ten `LoadImage` slots and declares `{"refs": {"min": 1, "max": 10}}`,
+and a run keeps the first *k* loaders and takes the rest out of the graph before
+it is submitted. Ten near-identical graphs — the shape three of them already had —
+would otherwise have to be re-saved together every time the sampler or a LoRA slot
+changed. `POST /sillytalk/generate` therefore takes up to ten reference pictures
+per request instead of eight. Whether `TextEncodeQwenImage21` accepts ten image
+inputs was not measured on a live server for this release: the catalogue declares
+the ten the graph wires, a refusal comes back as a `400` naming the server's own
+complaint rather than a picture drawn from two of them, and the number to lower is
+the range in the catalogue file. `workflows/qwen-image-2512.json` is gone —
+Qwen-Image-Edit 2512 is no longer offered, so Qwen-Image 2.1 is the whole
+catalogue. A single reference now uses the numbered placeholder like every other
+count; the unnumbered `PARAM_STRING_INPUT_IMAGE_FILENAME` it used to fall back to
+is no longer read.
 
 **1.3.1** — The shapes both catalogues draw are 1.5× smaller: 880×880 square,
 752×976 portrait and 976×752 landscape instead of 1328×1328, 1136×1472 and

@@ -105,9 +105,10 @@ class GenerateTest(TempDirTestCase):
         self.assertEqual(self.left_behind(), [])
 
     async def test_a_request_refused_halfway_leaves_its_earlier_pictures_behind_nothing(self):
-        """The cap is hit on the ninth picture; the eight already written have
-        no job to own them, so the request itself must remove them."""
-        parts = [field("model", "m"), field("prompt", "an apple")] + [picture(f"r{i}.png") for i in range(9)]
+        """The cap is hit on the last picture; the ones already written have no
+        job to own them, so the request itself must remove them."""
+        parts = [field("model", "m"), field("prompt", "an apple")]
+        parts += [picture(f"r{i}.png") for i in range(routes.MAX_REF_FILES + 1)]
         response = await self.post(*parts)
         self.assertEqual(response.status, 400)
         self.assertIn("reference images", response.body.decode())

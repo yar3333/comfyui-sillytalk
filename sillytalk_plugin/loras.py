@@ -87,9 +87,9 @@ def available_slots(spec: Any) -> int:
     from .workflows import api_graph
 
     best = 0
-    for refs, _graph in spec.graphs:
+    for variant in spec.variants:
         try:
-            best = max(best, len(slots(api_graph(spec, refs))))
+            best = max(best, len(slots(api_graph(spec, variant.refs[-1]))))
         except Exception:
             continue
     return best

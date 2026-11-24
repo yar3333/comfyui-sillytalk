@@ -77,7 +77,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(run.extra_weight(), {"1": 150}, "a LoRA costs memory on its model's card")
 
     def test_a_loader_the_chain_starts_at_a_lora_is_found_through_it(self):
-        # The 2512 workflow has a fixed Lightning loader before its slots: the
+        # A workflow may hold a fixed Lightning loader before its slots: the
         # slot's weight belongs to the model, not to the LoRA in front of it.
         graph_ = graph()
         graph_["10"]["inputs"]["lora_name"] = "lightning.safetensors"

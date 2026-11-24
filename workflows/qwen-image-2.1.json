@@ -667,715 +667,13 @@
    }
   },
   {
-   "refs": 1,
+   "refs": {
+    "min": 1,
+    "max": 10
+   },
    "workflow": {
-    "last_node_id": 14,
-    "last_link_id": 16,
-    "nodes": [
-     {
-      "id": 1,
-      "type": "UNETLoaderMultiGPU",
-      "pos": [
-       40,
-       60
-      ],
-      "size": [
-       280,
-       136
-      ],
-      "flags": {},
-      "order": 0,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-       {
-        "name": "MODEL",
-        "type": "MODEL",
-        "links": [
-         11
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "UNETLoaderMultiGPU"
-      },
-      "widgets_values": [
-       "PARAM_MODEL_FILE",
-       "default",
-       "cuda:0"
-      ],
-      "title": "Load Qwen-Image 2.1 (diffusion)"
-     },
-     {
-      "id": 2,
-      "type": "CLIPLoaderMultiGPU",
-      "pos": [
-       40,
-       256
-      ],
-      "size": [
-       280,
-       136
-      ],
-      "flags": {},
-      "order": 1,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-       {
-        "name": "CLIP",
-        "type": "CLIP",
-        "links": [
-         3
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "CLIPLoaderMultiGPU"
-      },
-      "widgets_values": [
-       "qwen3vl_8b_int8_convrot.safetensors",
-       "qwen_image",
-       "cuda:0"
-      ],
-      "title": "Load Qwen3-VL 8B (text encoder)"
-     },
-     {
-      "id": 3,
-      "type": "VAELoaderMultiGPU",
-      "pos": [
-       40,
-       452
-      ],
-      "size": [
-       280,
-       110
-      ],
-      "flags": {},
-      "order": 2,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-       {
-        "name": "VAE",
-        "type": "VAE",
-        "links": [
-         2,
-         9
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "VAELoaderMultiGPU"
-      },
-      "widgets_values": [
-       "qwen_image_2.1_vae_bf16.safetensors",
-       "cuda:0"
-      ],
-      "title": "Load Qwen-Image 2.1 VAE"
-     },
-     {
-      "id": 4,
-      "type": "LoadImage",
-      "pos": [
-       40,
-       648
-      ],
-      "size": [
-       280,
-       150
-      ],
-      "flags": {},
-      "order": 3,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-       {
-        "name": "IMAGE",
-        "type": "IMAGE",
-        "links": [
-         4
-        ]
-       },
-       {
-        "name": "MASK",
-        "type": "MASK",
-        "links": []
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "LoadImage"
-      },
-      "widgets_values": [
-       "PARAM_STRING_INPUT_IMAGE_FILENAME",
-       "image"
-      ],
-      "title": "Load Reference Image"
-     },
-     {
-      "id": 5,
-      "type": "TextEncodeQwenImage21",
-      "pos": [
-       420,
-       230
-      ],
-      "size": [
-       280,
-       190
-      ],
-      "flags": {},
-      "order": 4,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "clip",
-        "type": "CLIP",
-        "link": 3
-       },
-       {
-        "name": "vae",
-        "type": "VAE",
-        "link": 2
-       },
-       {
-        "name": "images.image_1",
-        "type": "IMAGE",
-        "link": 4
-       }
-      ],
-      "outputs": [
-       {
-        "name": "positive",
-        "type": "CONDITIONING",
-        "links": [
-         5
-        ]
-       },
-       {
-        "name": "negative",
-        "type": "CONDITIONING",
-        "links": [
-         6
-        ]
-       },
-       {
-        "name": "latent",
-        "type": "LATENT",
-        "links": []
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "TextEncodeQwenImage21"
-      },
-      "widgets_values": [
-       "PARAM_PROMPT",
-       "",
-       1024
-      ],
-      "title": "Text Encode Qwen Image 2.1"
-     },
-     {
-      "id": 6,
-      "type": "EmptyLatentImage",
-      "pos": [
-       420,
-       492
-      ],
-      "size": [
-       280,
-       158
-      ],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "width",
-        "type": "INT",
-        "link": null
-       },
-       {
-        "name": "height",
-        "type": "INT",
-        "link": null
-       }
-      ],
-      "outputs": [
-       {
-        "name": "LATENT",
-        "type": "LATENT",
-        "links": [
-         7
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "EmptyLatentImage"
-      },
-      "widgets_values": [
-       "PARAM_INT_OUTPUT_IMAGE_WIDTH",
-       "PARAM_INT_OUTPUT_IMAGE_HEIGHT",
-       1
-      ],
-      "title": "Empty Latent"
-     },
-     {
-      "id": 7,
-      "type": "KSampler",
-      "pos": [
-       800,
-       60
-      ],
-      "size": [
-       280,
-       306
-      ],
-      "flags": {},
-      "order": 6,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "model",
-        "type": "MODEL",
-        "link": 16
-       },
-       {
-        "name": "positive",
-        "type": "CONDITIONING",
-        "link": 5
-       },
-       {
-        "name": "negative",
-        "type": "CONDITIONING",
-        "link": 6
-       },
-       {
-        "name": "latent_image",
-        "type": "LATENT",
-        "link": 7
-       }
-      ],
-      "outputs": [
-       {
-        "name": "LATENT",
-        "type": "LATENT",
-        "links": [
-         8
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "KSampler"
-      },
-      "widgets_values": [
-       "PARAM_SEED",
-       "fixed",
-       25,
-       1,
-       "euler",
-       "simple",
-       1
-      ]
-     },
-     {
-      "id": 8,
-      "type": "VAEDecode",
-      "pos": [
-       1180,
-       60
-      ],
-      "size": [
-       280,
-       80
-      ],
-      "flags": {},
-      "order": 7,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "samples",
-        "type": "LATENT",
-        "link": 8
-       },
-       {
-        "name": "vae",
-        "type": "VAE",
-        "link": 9
-       }
-      ],
-      "outputs": [
-       {
-        "name": "IMAGE",
-        "type": "IMAGE",
-        "links": [
-         10
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "VAEDecode"
-      },
-      "widgets_values": [],
-      "title": "VAE Decode"
-     },
-     {
-      "id": 9,
-      "type": "SaveImage",
-      "pos": [
-       1560,
-       60
-      ],
-      "size": [
-       280,
-       110
-      ],
-      "flags": {},
-      "order": 8,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "images",
-        "type": "IMAGE",
-        "link": 10
-       }
-      ],
-      "outputs": [],
-      "properties": {
-       "Node name for S&R": "SaveImage"
-      },
-      "widgets_values": [
-       "PARAM_STRING_OUTPUT_IMAGE_FILENAME"
-      ]
-     },
-     {
-      "id": 10,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-       380,
-       380
-      ],
-      "size": [
-       270,
-       82
-      ],
-      "flags": {},
-      "order": 2,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "model",
-        "type": "MODEL",
-        "link": 11
-       }
-      ],
-      "outputs": [
-       {
-        "name": "MODEL",
-        "type": "MODEL",
-        "links": [
-         12
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-       "PARAM_LORA_1",
-       1.0
-      ],
-      "title": "LoRA slot 1"
-     },
-     {
-      "id": 11,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-       680,
-       380
-      ],
-      "size": [
-       270,
-       82
-      ],
-      "flags": {},
-      "order": 3,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "model",
-        "type": "MODEL",
-        "link": 12
-       }
-      ],
-      "outputs": [
-       {
-        "name": "MODEL",
-        "type": "MODEL",
-        "links": [
-         13
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-       "PARAM_LORA_2",
-       1.0
-      ],
-      "title": "LoRA slot 2"
-     },
-     {
-      "id": 12,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-       980,
-       380
-      ],
-      "size": [
-       270,
-       82
-      ],
-      "flags": {},
-      "order": 4,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "model",
-        "type": "MODEL",
-        "link": 13
-       }
-      ],
-      "outputs": [
-       {
-        "name": "MODEL",
-        "type": "MODEL",
-        "links": [
-         14
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-       "PARAM_LORA_3",
-       1.0
-      ],
-      "title": "LoRA slot 3"
-     },
-     {
-      "id": 13,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-       1280,
-       380
-      ],
-      "size": [
-       270,
-       82
-      ],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "model",
-        "type": "MODEL",
-        "link": 14
-       }
-      ],
-      "outputs": [
-       {
-        "name": "MODEL",
-        "type": "MODEL",
-        "links": [
-         15
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-       "PARAM_LORA_4",
-       1.0
-      ],
-      "title": "LoRA slot 4"
-     },
-     {
-      "id": 14,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-       1580,
-       380
-      ],
-      "size": [
-       270,
-       82
-      ],
-      "flags": {},
-      "order": 6,
-      "mode": 0,
-      "inputs": [
-       {
-        "name": "model",
-        "type": "MODEL",
-        "link": 15
-       }
-      ],
-      "outputs": [
-       {
-        "name": "MODEL",
-        "type": "MODEL",
-        "links": [
-         16
-        ]
-       }
-      ],
-      "properties": {
-       "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-       "PARAM_LORA_5",
-       1.0
-      ],
-      "title": "LoRA slot 5"
-     }
-    ],
-    "links": [
-     [
-      2,
-      3,
-      0,
-      5,
-      1,
-      "VAE"
-     ],
-     [
-      3,
-      2,
-      0,
-      5,
-      0,
-      "CLIP"
-     ],
-     [
-      4,
-      4,
-      0,
-      5,
-      2,
-      "IMAGE"
-     ],
-     [
-      5,
-      5,
-      0,
-      7,
-      1,
-      "CONDITIONING"
-     ],
-     [
-      6,
-      5,
-      1,
-      7,
-      2,
-      "CONDITIONING"
-     ],
-     [
-      7,
-      6,
-      0,
-      7,
-      3,
-      "LATENT"
-     ],
-     [
-      8,
-      7,
-      0,
-      8,
-      0,
-      "LATENT"
-     ],
-     [
-      9,
-      3,
-      0,
-      8,
-      1,
-      "VAE"
-     ],
-     [
-      10,
-      8,
-      0,
-      9,
-      0,
-      "IMAGE"
-     ],
-     [
-      11,
-      1,
-      0,
-      10,
-      0,
-      "MODEL"
-     ],
-     [
-      12,
-      10,
-      0,
-      11,
-      0,
-      "MODEL"
-     ],
-     [
-      13,
-      11,
-      0,
-      12,
-      0,
-      "MODEL"
-     ],
-     [
-      14,
-      12,
-      0,
-      13,
-      0,
-      "MODEL"
-     ],
-     [
-      15,
-      13,
-      0,
-      14,
-      0,
-      "MODEL"
-     ],
-     [
-      16,
-      14,
-      0,
-      7,
-      0,
-      "MODEL"
-     ]
-    ],
-    "groups": [],
-    "config": {},
-    "extra": {},
-    "version": 0.4
-   }
-  },
-  {
-   "refs": 2,
-   "workflow": {
-    "last_node_id": 15,
-    "last_link_id": 17,
+    "last_node_id": 23,
+    "last_link_id": 25,
     "nodes": [
      {
       "id": 1,
@@ -1564,7 +862,7 @@
       ],
       "size": [
        280,
-       220
+       460
       ],
       "flags": {},
       "order": 5,
@@ -1589,6 +887,46 @@
         "name": "images.image_2",
         "type": "IMAGE",
         "link": 11
+       },
+       {
+        "name": "images.image_3",
+        "type": "IMAGE",
+        "link": 18
+       },
+       {
+        "name": "images.image_4",
+        "type": "IMAGE",
+        "link": 19
+       },
+       {
+        "name": "images.image_5",
+        "type": "IMAGE",
+        "link": 20
+       },
+       {
+        "name": "images.image_6",
+        "type": "IMAGE",
+        "link": 21
+       },
+       {
+        "name": "images.image_7",
+        "type": "IMAGE",
+        "link": 22
+       },
+       {
+        "name": "images.image_8",
+        "type": "IMAGE",
+        "link": 23
+       },
+       {
+        "name": "images.image_9",
+        "type": "IMAGE",
+        "link": 24
+       },
+       {
+        "name": "images.image_10",
+        "type": "IMAGE",
+        "link": 25
        }
       ],
       "outputs": [
@@ -1627,7 +965,7 @@
       "type": "EmptyLatentImage",
       "pos": [
        420,
-       522
+       762
       ],
       "size": [
        280,
@@ -1800,7 +1138,7 @@
       "type": "LoraLoaderModelOnly",
       "pos": [
        380,
-       380
+       1080
       ],
       "size": [
        270,
@@ -1839,7 +1177,7 @@
       "type": "LoraLoaderModelOnly",
       "pos": [
        680,
-       380
+       1180
       ],
       "size": [
        270,
@@ -1878,7 +1216,7 @@
       "type": "LoraLoaderModelOnly",
       "pos": [
        980,
-       380
+       1280
       ],
       "size": [
        270,
@@ -1917,7 +1255,7 @@
       "type": "LoraLoaderModelOnly",
       "pos": [
        1280,
-       380
+       1380
       ],
       "size": [
        270,
@@ -1956,7 +1294,7 @@
       "type": "LoraLoaderModelOnly",
       "pos": [
        1580,
-       380
+       980
       ],
       "size": [
        270,
@@ -1989,6 +1327,310 @@
        1.0
       ],
       "title": "LoRA slot 5"
+     },
+     {
+      "id": 16,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       1008
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         18
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_3",
+       "image"
+      ],
+      "title": "Load Reference Image 3"
+     },
+     {
+      "id": 17,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       1188
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         19
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_4",
+       "image"
+      ],
+      "title": "Load Reference Image 4"
+     },
+     {
+      "id": 18,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       1368
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         20
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_5",
+       "image"
+      ],
+      "title": "Load Reference Image 5"
+     },
+     {
+      "id": 19,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       1548
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         21
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_6",
+       "image"
+      ],
+      "title": "Load Reference Image 6"
+     },
+     {
+      "id": 20,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       1728
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         22
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_7",
+       "image"
+      ],
+      "title": "Load Reference Image 7"
+     },
+     {
+      "id": 21,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       1908
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         23
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_8",
+       "image"
+      ],
+      "title": "Load Reference Image 8"
+     },
+     {
+      "id": 22,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       2088
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         24
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_9",
+       "image"
+      ],
+      "title": "Load Reference Image 9"
+     },
+     {
+      "id": 23,
+      "type": "LoadImage",
+      "pos": [
+       40,
+       2268
+      ],
+      "size": [
+       280,
+       150
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+       {
+        "name": "IMAGE",
+        "type": "IMAGE",
+        "links": [
+         25
+        ]
+       },
+       {
+        "name": "MASK",
+        "type": "MASK",
+        "links": []
+       }
+      ],
+      "properties": {
+       "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+       "PARAM_STRING_INPUT_IMAGE_FILENAME_10",
+       "image"
+      ],
+      "title": "Load Reference Image 10"
      }
     ],
     "links": [
@@ -2119,6 +1761,70 @@
       7,
       0,
       "MODEL"
+     ],
+     [
+      18,
+      16,
+      0,
+      5,
+      4,
+      "IMAGE"
+     ],
+     [
+      19,
+      17,
+      0,
+      5,
+      5,
+      "IMAGE"
+     ],
+     [
+      20,
+      18,
+      0,
+      5,
+      6,
+      "IMAGE"
+     ],
+     [
+      21,
+      19,
+      0,
+      5,
+      7,
+      "IMAGE"
+     ],
+     [
+      22,
+      20,
+      0,
+      5,
+      8,
+      "IMAGE"
+     ],
+     [
+      23,
+      21,
+      0,
+      5,
+      9,
+      "IMAGE"
+     ],
+     [
+      24,
+      22,
+      0,
+      5,
+      10,
+      "IMAGE"
+     ],
+     [
+      25,
+      23,
+      0,
+      5,
+      11,
+      "IMAGE"
      ]
     ],
     "groups": [],

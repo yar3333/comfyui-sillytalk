@@ -4,19 +4,18 @@ A model is one JSON file in `<plugin>/workflows/<code>.json`; the file stem IS
 the model code a client sends. The format:
 
     {
-      "label": "Qwen-Image 2512",              // optional, for the UI
+      "label": "Qwen-Image 2.1",               // optional, for the UI
       "sizes": {                               // what the client picks an
-        "square":    [1328, 1328],             // ORIENTATION of — the server
-        "portrait":  [1136, 1472],             // owns the pixel numbers
-        "landscape": [1472, 1136]
+        "square":    [880, 880],               // ORIENTATION of — the server
+        "portrait":  [752, 976],               // owns the pixel numbers
+        "landscape": [976, 752]
       },
       "orientation": "square",                 // used when the client says none
-      "model_file": "qwen_image_2512_fp8.safetensors",  // PARAM_MODEL_FILE's default
+      "model_file": "qwen_image_2.1_int8_convrot.safetensors",  // PARAM_MODEL_FILE's default
       "steps": {"min": 4, "max": 50},           // optional: the range a client may ask for
       "variants": [
         { "refs": 0, "workflow": { ...ComfyUI UI-format graph... } },
-        { "refs": 1, "workflow": { ... } },
-        { "refs": 2, "workflow": { ... } }
+        { "refs": {"min": 1, "max": 10}, "workflow": { ...10 reference slots... } }
       ]
     }
 
@@ -25,6 +24,14 @@ the model code a client sends. The format:
 client may choose a step count at all: the number wired into the graph is the
 default, and a model distilled for a fixed few steps says so with `min == max`
 (for example `{"min": 4, "max": 4}`). A file without it takes no `steps` field.
+
+`refs` is either the one reference count a graph was drawn for, or
+`{"min": …, "max": …}` for a graph wired with the maximum number of reference
+slots — the plugin fills the first *k* and takes the rest out (`refs.py`). A
+range is checked against the placeholders the graph actually carries, so a file
+cannot promise ten references and wire two. Only a reference that is a single
+loader can be cut that way: a graph whose reference is a chain of its own gets
+one variant per count.
 
 `model_file` is the file the
 workflow's `PARAM_MODEL_FILE` loader uses when the client does not name one —
@@ -56,6 +63,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import refs as refs_module
+from .params import find_placeholders
+
 logger = logging.getLogger(__name__)
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
@@ -68,6 +78,19 @@ ORIENTATIONS = ("square", "portrait", "landscape")
 
 class WorkflowError(Exception):
     """A model is unknown, or its file cannot be turned into a runnable graph."""
+
+
+@dataclass(frozen=True)
+class Variant:
+    """One graph and the reference counts it serves.
+
+    Exactly one count for a graph drawn per count, which is what a reference that
+    is a chain of its own needs, or a whole range for a graph wired with the
+    maximum number of single-loader slots — `refs.trim` shortens that one per run.
+    """
+
+    refs: tuple[int, ...]
+    graph: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -87,16 +110,16 @@ class ModelSpec:
     # sampler settings outright. The number wired into the graph is the default,
     # so a file distilled for four steps declares min == max == 4.
     steps_range: tuple[int, int] | None = None
-    # refs -> the UI-format graph of that reference count, ascending.
-    graphs: tuple[tuple[int, dict[str, Any]], ...] = ()
+    # The graphs this file offers, ordered by their first reference count.
+    variants: tuple[Variant, ...] = ()
 
     @property
     def refs(self) -> tuple[int, ...]:
-        return tuple(refs for refs, _ in self.graphs)
+        return tuple(sorted({count for variant in self.variants for count in variant.refs}))
 
     @property
     def max_refs(self) -> int:
-        return self.graphs[-1][0] if self.graphs else -1
+        return max(self.refs) if self.variants else -1
 
     def size_for(self, orientation: str | None) -> tuple[int, int]:
         """The pixel pair of one orientation, or the model's own default."""
@@ -109,14 +132,17 @@ class ModelSpec:
             f"{', '.join(f'{name} {width}x{height}' for name, (width, height) in self.sizes)}"
         )
 
-    def graph_for(self, refs: int) -> dict[str, Any]:
-        for count, graph in self.graphs:
-            if count == refs:
-                return graph
+    def variant_for(self, refs: int) -> Variant:
+        for variant in self.variants:
+            if refs in variant.refs:
+                return variant
         raise WorkflowError(
             f"the model '{self.code}' has no variant for {refs} reference image(s); "
             f"its file defines {list(self.refs)}"
         )
+
+    def graph_for(self, refs: int) -> dict[str, Any]:
+        return self.variant_for(refs).graph
 
     def describe(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -150,6 +176,8 @@ class CatalogueEntry:
     orientation: str = "square"
     model_file: str | None = None
     steps_range: tuple[int, int] | None = None
+    # (the reference counts it serves, its graph) as the file declares them.
+    variants: list[tuple[tuple[int, ...], dict[str, Any]]] = field(default_factory=list)
     error: str | None = None
 
 
@@ -209,17 +237,21 @@ def _read_file(path: Path) -> CatalogueEntry:
         entry.error = "'variants' must be a non-empty list of {refs, workflow}"
         return entry
 
-    seen: dict[int, dict[str, Any]] = {}
+    seen: set[int] = set()
     for index, variant in enumerate(variants):
         if not isinstance(variant, dict):
             entry.error = f"variants[{index}] is not an object"
             return entry
-        refs = variant.get("refs")
-        if not isinstance(refs, int) or isinstance(refs, bool) or refs < 0:
-            entry.error = f"variants[{index}].refs must be an integer >= 0"
+        counts = _refs_counts(variant.get("refs"))
+        if counts is None:
+            entry.error = (
+                f"variants[{index}].refs must be an integer >= 0, or an object of exactly "
+                f"'min' and 'max' whole numbers with min <= max"
+            )
             return entry
-        if refs in seen:
-            entry.error = f"variants[{index}]: two variants for {refs} reference image(s)"
+        clash = [count for count in counts if count in seen]
+        if clash:
+            entry.error = f"variants[{index}]: two variants for {clash[0]} reference image(s)"
             return entry
         graph = variant.get("workflow")
         if not isinstance(graph, dict) or not graph:
@@ -231,10 +263,65 @@ def _read_file(path: Path) -> CatalogueEntry:
                 f"'class_type' (the API format)"
             )
             return entry
-        seen[refs] = graph
+        if len(counts) > 1:
+            wired = _wired_slots(graph)
+            if wired != set(counts):
+                entry.error = (
+                    f"variants[{index}] serves {counts[0]}..{counts[-1]} reference images but wires "
+                    f"{_slot_text(wired)}; a range needs one numbered "
+                    f"PARAM_STRING_INPUT_IMAGE_FILENAME_n slot per reference"
+                )
+                return entry
+        seen.update(counts)
+        entry.variants.append((counts, graph))
 
+    entry.variants.sort(key=lambda item: item[0][0])
     entry.refs = sorted(seen)
     return entry
+
+
+def _refs_counts(value: Any) -> tuple[int, ...] | None:
+    """`2` or `{"min": 1, "max": 10}` as every reference count that variant serves.
+
+    The range form is what a graph wired for the maximum declares: one number
+    means "this graph, drawn for exactly this many references", and the ten
+    almost identical graphs that spelling would need are what the range avoids.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return (value,) if value >= 0 else None
+    if not isinstance(value, dict) or set(value) != {"min", "max"}:
+        return None
+    limits: list[int] = []
+    for name in ("min", "max"):
+        item = value[name]
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            return None
+        limits.append(item)
+    low, high = limits
+    if low > high:
+        return None
+    return tuple(range(low, high + 1))
+
+
+def _wired_slots(graph: dict[str, Any]) -> set[int]:
+    """The reference numbers a graph actually carries, in either file format.
+
+    Read from the placeholders rather than from the converted graph, because this
+    runs while the catalogue is being read — before anything may touch the node
+    registry.
+    """
+    found: set[int] = set()
+    for name in find_placeholders(graph):
+        match = refs_module.SLOT_RE.match(name)
+        if match:
+            found.add(int(match.group(1)))
+    return found
+
+
+def _slot_text(numbers: set[int]) -> str:
+    return "no PARAM_STRING_INPUT_IMAGE_FILENAME slot" if not numbers else f"slots {sorted(numbers)}"
 
 
 def _steps_range(value: Any) -> tuple[int, int] | None:
@@ -305,28 +392,28 @@ def model(code: str) -> ModelSpec | None:
 
 
 def _spec(entry: CatalogueEntry) -> ModelSpec:
-    path = Path(entry.file)
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    graphs = {int(v["refs"]): v["workflow"] for v in raw["variants"]}
     return ModelSpec(
         code=entry.code,
-        file=path,
+        file=Path(entry.file),
         label=entry.label,
         sizes=tuple(entry.sizes.items()),
         default_orientation=entry.orientation,
         model_file=entry.model_file,
         steps_range=entry.steps_range,
-        graphs=tuple(sorted(graphs.items())),
+        variants=tuple(Variant(refs=counts, graph=graph) for counts, graph in entry.variants),
     )
 
 
 def api_graph(spec: ModelSpec, refs: int) -> dict[str, Any]:
     """The API-format graph of one variant, ready to submit to the queue.
 
-    Converted once per (file version, refs) and handed out as a copy, because
-    every run writes its own prompt, seed and file names into it.
+    Converted once per file version and handed out as a copy, because every run
+    writes its own prompt, seed and file names into it — and, for a variant wired
+    with the maximum number of references, with the slots this run does not use
+    already taken out.
     """
-    ui_graph = spec.graph_for(refs)
+    # Raises with the counts this file does define when the run is not one of them.
+    spec.graph_for(refs)
     try:
         mtime = spec.file.stat().st_mtime
     except OSError:
@@ -338,7 +425,9 @@ def api_graph(spec: ModelSpec, refs: int) -> dict[str, Any]:
     converted = cached[1].get(refs)
     if converted is None:
         raise WorkflowError(f"the '{spec.code}' variant for {refs} references converted to nothing")
-    return copy.deepcopy(converted)
+    out = copy.deepcopy(converted)
+    refs_module.trim(out, refs)
+    return out
 
 
 def _is_api_format(graph: dict[str, Any]) -> bool:
@@ -354,23 +443,35 @@ def _is_api_format(graph: dict[str, Any]) -> bool:
 
 
 def _convert_all(spec: ModelSpec) -> dict[int, dict[str, Any]]:
-    out: dict[int, dict[str, Any]] = {}
-    for refs, graph in spec.graphs:
-        if _is_api_format(graph):
-            api = graph
-        else:
-            # Only a UI-format graph needs the registry, so only then is the
-            # converter imported: at custom-node import time the registry is
-            # still filling, and this runs on the first job instead.
-            from .vendor.workflow_converter import WorkflowConverter
+    """refs -> API graph, converting each distinct graph once.
 
-            api = WorkflowConverter.convert_to_api(copy.deepcopy(graph))
-        if not isinstance(api, dict) or not api:
-            raise WorkflowError(
-                f"the '{spec.code}' variant for {refs} references did not convert "
-                f"(is its graph a ComfyUI workflow this server can load?)"
-            )
-        out[refs] = api
+    A range variant is one graph under several keys, so the conversion walks the
+    variants rather than the counts: ten references out of one template must not
+    mean ten conversions of the same file.
+    """
+    out: dict[int, dict[str, Any]] = {}
+    converted: dict[int, dict[str, Any]] = {}
+    for variant in spec.variants:
+        key = id(variant.graph)
+        api = converted.get(key)
+        if api is None:
+            if _is_api_format(variant.graph):
+                api = variant.graph
+            else:
+                # Only a UI-format graph needs the registry, so only then is the
+                # converter imported: at custom-node import time the registry is
+                # still filling, and this runs on the first job instead.
+                from .vendor.workflow_converter import WorkflowConverter
+
+                api = WorkflowConverter.convert_to_api(copy.deepcopy(variant.graph))
+            if not isinstance(api, dict) or not api:
+                raise WorkflowError(
+                    f"the '{spec.code}' variant for {variant.refs[0]} reference image(s) did not convert "
+                    f"(is its graph a ComfyUI workflow this server can load?)"
+                )
+            converted[key] = api
+        for count in variant.refs:
+            out[count] = api
     logger.info("sillytalk: converted the '%s' workflow (%s)", spec.code, ", ".join(str(r) for r in sorted(out)))
     return out
 
@@ -383,9 +484,9 @@ def steps_default(spec: ModelSpec) -> int | None:
     sends no `steps`, so a graph edited in ComfyUI keeps that answer true.
     """
     found: set[int] = set()
-    for refs, _graph in spec.graphs:
+    for variant in spec.variants:
         try:
-            graph = api_graph(spec, refs)
+            graph = api_graph(spec, variant.refs[-1])
         except WorkflowError:
             continue
         for node in graph.values():

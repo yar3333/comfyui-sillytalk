@@ -26,7 +26,7 @@ def spec_with(graph: dict, code: str = "test-model", root: Path | None = None, *
         label=code,
         sizes=SIZES,
         default_orientation="square",
-        graphs=((0, graph),),
+        variants=(workflows.Variant(refs=(0,), graph=graph),),
         **extra,
     )
 
@@ -75,8 +75,8 @@ class BuildGraphTest(unittest.TestCase):
         self.assertEqual(out["10"]["inputs"]["seed"], 42)
         self.assertEqual(out["13"]["inputs"]["filename_prefix"], "sillytalk/11111111")
 
-    def test_one_reference_is_unnumbered(self):
-        graph = {"7": {"class_type": "LoadImage", "inputs": {"image": "PARAM_STRING_INPUT_IMAGE_FILENAME"}}}
+    def test_references_are_numbered_from_one(self):
+        graph = {"7": {"class_type": "LoadImage", "inputs": {"image": "PARAM_STRING_INPUT_IMAGE_FILENAME_1"}}}
         one = self.build(graph, [Path("input/sillytalk_ab_apple.png")])
         self.assertEqual(one["7"]["inputs"]["image"], "sillytalk_ab_apple.png")
 

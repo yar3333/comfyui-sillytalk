@@ -9,6 +9,11 @@ the UI-format graph of each reference count under the keys `text`, `oneImage` an
 entry says how many references it takes — so a fourth reference is a new entry
 rather than a new key name somebody has to guess.
 
+A graph that carries one `LoadImage` per reference can instead be declared once
+with `"refs": {"min": 1, "max": N}`, and the plugin fills the first *k* slots and
+drops the rest. The source format this reads has no such spelling, so that one
+stays a hand edit of the catalogue file.
+
 Device widgets are left exactly as the source has them: the plugin writes every
 `device` input at run time, so the value in the file is never consulted.
 
@@ -27,9 +32,8 @@ from typing import Any
 VARIANT_KEYS = (("text", 0), ("oneImage", 1), ("twoImages", 2))
 LABELS = {
     "qwen-image-2.1": "Qwen-Image 2.1 (references through the same model)",
-    "qwen-image-2512": "Qwen-Image 2512 (references through Qwen-Image-Edit 2511)",
 }
-DEFAULT_SIZE = {"qwen-image-2.1": 1328, "qwen-image-2512": 1328}
+DEFAULT_SIZE = {"qwen-image-2.1": 1328}
 
 
 def convert(source: Path) -> dict[str, Any]:

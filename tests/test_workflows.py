@@ -28,6 +28,17 @@ def sampler_graph(steps: int) -> dict:
     return {"2": {"class_type": "KSampler", "inputs": {"seed": 1, "steps": steps}}}
 
 
+def loader_graph(slots: int) -> dict:
+    """One encoder fed by `slots` numbered reference loaders."""
+    graph = {"1": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["2", 0]}}}
+    for number in range(1, slots + 1):
+        node_id = str(100 + number)
+        graph[node_id] = {"class_type": "LoadImage",
+                          "inputs": {"image": f"PARAM_STRING_INPUT_IMAGE_FILENAME_{number}"}}
+        graph["1"]["inputs"][f"images.image_{number}"] = [node_id, 0]
+    return graph
+
+
 def model_data(**extra) -> dict:
     """One readable catalogue file, with the two fields every model needs."""
     data = {"sizes": SIZES, "variants": [{"refs": 0, "workflow": api_graph()}]}
@@ -197,6 +208,62 @@ class CatalogueTest(unittest.TestCase):
         with self.assertRaises(workflows.WorkflowError) as caught:
             spec.graph_for(1)
         self.assertIn("no variant for 1 reference", str(caught.exception))
+
+
+class ReferenceRangeTest(unittest.TestCase):
+    """A graph wired for the maximum serves every count below it: the run keeps
+    the first slots and the rest is taken out, so one graph replaces ten."""
+
+    setUp = CatalogueTest.setUp
+    write = CatalogueTest.write
+    error_of = CatalogueTest.error_of
+
+    def write_wide(self, code: str = "wide", low: int = 1, high: int = 3, slots: int = 3) -> Path:
+        return self.write(code, model_data(variants=[
+            {"refs": 0, "workflow": api_graph()},
+            {"refs": {"min": low, "max": high}, "workflow": loader_graph(slots)},
+        ]))
+
+    def test_a_range_serves_every_count_in_between(self):
+        self.write_wide()
+        spec = workflows.model("wide")
+        self.assertEqual(spec.refs, (0, 1, 2, 3), "/sillytalk/models lists every count, not the range")
+        self.assertEqual(spec.max_refs, 3)
+        self.assertEqual(spec.describe()["refs"], [0, 1, 2, 3])
+
+    def test_the_run_gets_only_the_slots_it_has_references_for(self):
+        self.write_wide()
+        spec = workflows.model("wide")
+        one = workflows.api_graph(spec, 1)
+        self.assertEqual(sorted(one["1"]["inputs"]), ["clip", "images.image_1"])
+        three = workflows.api_graph(spec, 3)
+        self.assertEqual(len([key for key in three["1"]["inputs"] if key.startswith("images.")]), 3)
+
+    def test_a_range_that_promises_more_than_the_graph_wires_is_refused(self):
+        self.write_wide("liar", low=1, high=5, slots=2)
+        message = self.error_of("liar")
+        self.assertIn("serves 1..5 reference images", message)
+        self.assertIn("wires slots [1, 2]", message)
+
+    def test_a_range_with_a_gap_in_the_numbering_is_refused(self):
+        graph = loader_graph(2)
+        graph["102"]["inputs"]["image"] = "PARAM_STRING_INPUT_IMAGE_FILENAME_3"
+        self.write("gap", model_data(variants=[{"refs": {"min": 1, "max": 3}, "workflow": graph}]))
+        self.assertIn("wires slots [1, 3]", self.error_of("gap"))
+
+    def test_two_variants_that_claim_the_same_count_are_refused(self):
+        self.write("overlap", model_data(variants=[
+            {"refs": 1, "workflow": loader_graph(1)},
+            {"refs": {"min": 1, "max": 2}, "workflow": loader_graph(2)},
+        ]))
+        self.assertIn("two variants for 1 reference image(s)", self.error_of("overlap"))
+
+    def test_a_malformed_refs_is_an_error(self):
+        for broken in ({"min": 1}, {"min": 1, "max": 3, "step": 1}, {"min": 3, "max": 1},
+                       {"min": "1", "max": "3"}, -1, True, [1, 2]):
+            with self.subTest(broken=broken):
+                self.write("broken-refs", model_data(variants=[{"refs": broken, "workflow": api_graph()}]))
+                self.assertIn("refs must be", self.error_of("broken-refs"))
 
 
 if __name__ == "__main__":

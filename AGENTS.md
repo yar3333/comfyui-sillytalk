@@ -26,6 +26,7 @@ sillytalk_plugin/
     workflows.py                the catalogue (<plugin>/workflows/*.json) and UI -> API conversion
     placement.py                which cuda:N every loader of a run gets
     loras.py                    LoRA slots: fill, bypass, bytes per loader
+    refs.py                     reference slots: how many of them a run keeps
     lora_fit.py                 safetensors-header check: does this LoRA merge into this file
     model_files.py              the server's folder listings (diffusion_models, loras)
     params.py                   PARAM_* placeholder substitution
@@ -97,7 +98,11 @@ code, `sizes` is required and holds the pixels the model actually draws (ComfyUI
 rounds to a multiple of 16 — verify against a real run), `steps` is optional and
 declares the `min`/`max` a request may ask for (the number wired into the graph
 stays the default; a distilled model says `min == max`), and `variants` holds one
-graph per reference count. A file that fails to parse only removes itself from
+graph per reference count — or a range, `{"refs": {"min": 1, "max": 10}}`, for a
+graph wired with that many single-loader slots, which the run cuts down to what it
+sent (`refs.py`). A range is checked against the placeholders the graph carries, and
+only a reference that is one loader can be cut: a reference that is a chain of nodes
+of its own needs a variant per count. A file that fails to parse only removes itself from
 `/sillytalk/models` and shows up in `/sillytalk/health` under `broken_workflows`.
 Graphs may be UI format (converted in-process, cached by file mtime) or API format.
 `vendor/workflow_converter.py` is an unmodified public-domain copy (v2.3.0) —

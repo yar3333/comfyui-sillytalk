@@ -34,10 +34,10 @@ from .workflows import models as catalogue_models
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 MAX_PROMPT_CHARS = 8000
-MAX_REF_FILES = 8
+MAX_REF_FILES = 10
 MAX_REF_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_BYTES = 96 * 1024 * 1024
 # A run may stack this many LoRAs; a workflow with fewer slots says so itself.

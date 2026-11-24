@@ -320,9 +320,9 @@ def _placeholder_names(spec: ModelSpec) -> set[str]:
     from .workflows import api_graph
 
     found: set[str] = set()
-    for refs, _graph in spec.graphs:
+    for variant in spec.variants:
         try:
-            find_placeholders(api_graph(spec, refs), found)
+            find_placeholders(api_graph(spec, variant.refs[-1]), found)
         except WorkflowError:
             continue
     return found
@@ -360,13 +360,10 @@ def _build_graph(
     }
     if model_file:
         values["PARAM_MODEL_FILE"] = model_file
-    # The reference names follow the AiPic convention the workflow files were
-    # written with: one reference is unnumbered, two are numbered from one.
-    if len(job.refs) == 1:
-        values["PARAM_STRING_INPUT_IMAGE_FILENAME"] = job.refs[0].name
-    elif len(job.refs) > 1:
-        for index, path in enumerate(job.refs, start=1):
-            values[f"PARAM_STRING_INPUT_IMAGE_FILENAME_{index}"] = path.name
+    # The reference names are numbered from one, and a run that sends fewer
+    # pictures than its workflow can take keeps the first slots (see refs.py).
+    for index, path in enumerate(job.refs, start=1):
+        values[f"PARAM_STRING_INPUT_IMAGE_FILENAME_{index}"] = path.name
 
     graph = substitute(graph, values)
     job.steps = _apply_steps(graph, spec, job.steps)
@@ -377,7 +374,7 @@ def _build_graph(
             f"provide — a workflow file may only use PARAM_PROMPT, PARAM_SEED, PARAM_MODEL_FILE, "
             f"PARAM_LORA_1…{loras_module.SLOT_COUNT}/PARAM_LORA_STRENGTH_1…{loras_module.SLOT_COUNT}, "
             f"PARAM_INT_OUTPUT_IMAGE_WIDTH/_HEIGHT, PARAM_STRING_OUTPUT_IMAGE_FILENAME and "
-            f"PARAM_STRING_INPUT_IMAGE_FILENAME(_1/_2)"
+            f"PARAM_STRING_INPUT_IMAGE_FILENAME_1…N"
         )
     return graph, run
 
